@@ -26,8 +26,9 @@ using BoolVar = operations_research::sat::BoolVar;
 using CpSolverResponse = operations_research::sat::CpSolverResponse;
 using CpSolverStatus = operations_research::sat::CpSolverStatus;
 using LinearExpr = operations_research::sat::LinearExpr;
+using SatParameters = operations_research::sat::SatParameters;
 using operations_research::sat::SolutionBooleanValue;
-using operations_research::sat::Solve;
+using operations_research::sat::SolveWithParameters;
 
 int OtherEndpoint(const Edge &edge, int vertex) {
     if (edge.head == vertex) {
@@ -229,7 +230,10 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
     }
 
     while (true) {
-        const CpSolverResponse response = Solve(model.Build());
+        SatParameters parameters;
+        parameters.set_num_search_workers(1);
+        const CpSolverResponse response =
+            SolveWithParameters(model.Build(), parameters);
         if (response.status() != CpSolverStatus::FEASIBLE &&
             response.status() != CpSolverStatus::OPTIMAL) {
             return std::nullopt;
