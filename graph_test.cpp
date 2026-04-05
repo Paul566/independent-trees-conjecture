@@ -1,0 +1,287 @@
+#include "Graph.h"
+#include "GraphGenerator.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstdint>
+#include <limits>
+#include <random>
+#include <stdexcept>
+#include <tuple>
+#include <vector>
+
+namespace {
+
+int EdgeCount(const Graph &graph) {
+    return graph.NumEdges();
+}
+
+bool HasSelfLoop(const Graph &graph) {
+    for (const Edge &edge : graph.edges) {
+        if (edge.head == edge.tail) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int BruteForceConnectivity(const Graph &graph) {
+    const int num_vertices = graph.NumVertices();
+    if (num_vertices <= 1) {
+        return 0;
+    }
+
+    int best_cut = std::numeric_limits<int>::max();
+    const int mask_limit = 1 << num_vertices;
+    for (int mask = 1; mask < mask_limit - 1; ++mask) {
+        if ((mask & 1) == 0) {
+            continue;
+        }
+
+        int cut_size = 0;
+        for (const Edge &edge : graph.edges) {
+            const bool head_in_cut = (mask & (1 << edge.head)) != 0;
+            const bool tail_in_cut = (mask & (1 << edge.tail)) != 0;
+            if (head_in_cut != tail_in_cut) {
+                ++cut_size;
+            }
+        }
+        best_cut = std::min(best_cut, cut_size);
+    }
+
+    return best_cut == std::numeric_limits<int>::max() ? 0 : best_cut;
+}
+
+void TestGraphConstructsFromEdges() {
+    Graph graph({{0, 1}, {1, 2}, {1, 2}});
+
+    assert(graph.NumVertices() == 3);
+    assert(graph.NumEdges() == 3);
+    assert(graph.edges[0].head == 0 && graph.edges[0].tail == 1);
+    assert(graph.edges[1].head == 1 && graph.edges[1].tail == 2);
+    assert(graph.edges[2].head == 1 && graph.edges[2].tail == 2);
+    assert(graph.adj_list[0] == std::vector<int>({0}));
+    assert(graph.adj_list[1] == std::vector<int>({0, 1, 2}));
+    assert(graph.adj_list[2] == std::vector<int>({1, 2}));
+}
+
+void TestGraphRejectsNegativeEndpoints() {
+    bool threw = false;
+    try {
+        Graph graph({{-1, 0}});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestGraphRejectsLoops() {
+    bool threw = false;
+    try {
+        Graph graph({{0, 0}});
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestConnectivityOnKnownGraphs() {
+    Graph path({{0, 1}, {1, 2}, {2, 3}});
+    assert(path.Connectivity() == 1);
+
+    Graph cycle({{0, 1}, {1, 2}, {2, 3}, {3, 0}});
+    assert(cycle.Connectivity() == 2);
+
+    Graph parallel_edges({{0, 1}, {0, 1}, {0, 1}});
+    assert(parallel_edges.Connectivity() == 3);
+
+    Graph disconnected(4);
+    disconnected.AddEdge(0, 1);
+    disconnected.AddEdge(2, 3);
+    assert(disconnected.Connectivity() == 0);
+}
+
+void TestRandomGraphGenerationMatchesReferenceSampling() {
+    constexpr std::uint32_t kSeed = 123456789u;
+    constexpr int kNumVertices = 6;
+    constexpr int kNumEdges = 20;
+
+    GraphGenerator generator(kSeed);
+    const std::unique_ptr<Graph> graph =
+        generator.GenerateRandomGraph(kNumVertices, kNumEdges);
+
+    std::mt19937 reference_rng(kSeed);
+    std::uniform_int_distribution<int> vertex_distribution(0, kNumVertices - 1);
+    std::vector<std::tuple<int, int> > sampled_edges;
+    sampled_edges.reserve(kNumEdges);
+    for (int i = 0; i < kNumEdges; ++i) {
+        const int u = vertex_distribution(reference_rng);
+        int v = vertex_distribution(reference_rng);
+        while (v == u) {
+            v = vertex_distribution(reference_rng);
+        }
+        sampled_edges.emplace_back(u, v);
+    }
+
+    Graph expected_graph(kNumVertices);
+    for (const auto &[u, v] : sampled_edges) {
+        expected_graph.AddEdge(u, v);
+    }
+    assert(graph->edges.size() == expected_graph.edges.size());
+    for (std::size_t i = 0; i < graph->edges.size(); ++i) {
+        assert(graph->edges[i].head == expected_graph.edges[i].head);
+        assert(graph->edges[i].tail == expected_graph.edges[i].tail);
+    }
+    assert(graph->adj_list == expected_graph.adj_list);
+    assert(graph->NumVertices() == kNumVertices);
+    assert(EdgeCount(*graph) == kNumEdges);
+}
+
+void TestRandomGraphGenerationAllowsEmptyGraph() {
+    GraphGenerator generator(7);
+    const std::unique_ptr<Graph> graph = generator.GenerateRandomGraph(5, 0);
+
+    assert(graph->NumVertices() == 5);
+    assert(EdgeCount(*graph) == 0);
+}
+
+void TestRandomGraphGenerationRejectsEdgesOnEmptyVertexSet() {
+    GraphGenerator generator(7);
+
+    bool threw = false;
+    try {
+        generator.GenerateRandomGraph(0, 1);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestRandomGraphGenerationRejectsEdgesOnSingleVertex() {
+    GraphGenerator generator(7);
+
+    bool threw = false;
+    try {
+        generator.GenerateRandomGraph(1, 1);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestPinchUpdatesGraphStructure() {
+    Graph graph(2);
+    graph.AddEdge(0, 1);
+    graph.AddEdge(0, 1);
+    graph.AddEdge(0, 1);
+    graph.AddEdge(0, 1);
+
+    graph.Pinch({1, 3});
+
+    assert(graph.NumVertices() == 3);
+    assert(graph.NumEdges() == 6);
+    assert(graph.edges[0].head == 0 && graph.edges[0].tail == 1);
+    assert(graph.edges[1].head == 0 && graph.edges[1].tail == 2);
+    assert(graph.edges[2].head == 0 && graph.edges[2].tail == 1);
+    assert(graph.edges[3].head == 0 && graph.edges[3].tail == 2);
+    assert(graph.edges[4].head == 2 && graph.edges[4].tail == 1);
+    assert(graph.edges[5].head == 2 && graph.edges[5].tail == 1);
+    assert(graph.adj_list[0] == std::vector<int>({0, 2, 1, 3}));
+    assert(graph.adj_list[1] == std::vector<int>({0, 2, 4, 5}));
+    assert(graph.adj_list[2] == std::vector<int>({1, 4, 3, 5}));
+    assert(!HasSelfLoop(graph));
+}
+
+void TestRandomGraphGenerationOnManySeeds() {
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph = generator.GenerateRandomGraph(8, 25);
+
+        assert(graph->NumVertices() == 8);
+        assert(EdgeCount(*graph) == 25);
+        assert(!HasSelfLoop(*graph));
+    }
+}
+
+void TestConnectivityMatchesBruteForceOnRandomGraphs() {
+    std::mt19937 rng(987654321u);
+    std::uniform_int_distribution<int> vertex_distribution(2, 6);
+    std::uniform_int_distribution<int> edge_distribution(0, 10);
+
+    for (int iteration = 0; iteration < 200; ++iteration) {
+        const int num_vertices = vertex_distribution(rng);
+        const int num_edges = edge_distribution(rng);
+
+        Graph graph(num_vertices);
+        if (num_vertices >= 2) {
+            std::uniform_int_distribution<int> endpoint_distribution(0, num_vertices - 1);
+            for (int i = 0; i < num_edges; ++i) {
+                const int u = endpoint_distribution(rng);
+                int v = endpoint_distribution(rng);
+                while (v == u) {
+                    v = endpoint_distribution(rng);
+                }
+                graph.AddEdge(u, v);
+            }
+        }
+
+        assert(graph.Connectivity() == BruteForceConnectivity(graph));
+    }
+}
+
+void TestRandomPinchingGraphRejectsInvalidArguments() {
+    GraphGenerator generator(11);
+
+    bool threw = false;
+    try {
+        generator.RandomPinchingGraph(1, 4);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.RandomPinchingGraph(5, 3);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestRandomPinchingGraphOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.RandomPinchingGraph(kNumVertices, kConnectivity);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
+}  // namespace
+
+int main() {
+    TestGraphConstructsFromEdges();
+    TestGraphRejectsNegativeEndpoints();
+    TestGraphRejectsLoops();
+    TestConnectivityOnKnownGraphs();
+    TestRandomGraphGenerationMatchesReferenceSampling();
+    TestRandomGraphGenerationAllowsEmptyGraph();
+    TestRandomGraphGenerationRejectsEdgesOnEmptyVertexSet();
+    TestRandomGraphGenerationRejectsEdgesOnSingleVertex();
+    TestPinchUpdatesGraphStructure();
+    TestRandomGraphGenerationOnManySeeds();
+    TestConnectivityMatchesBruteForceOnRandomGraphs();
+    TestRandomPinchingGraphRejectsInvalidArguments();
+    TestRandomPinchingGraphOnManySeeds();
+    return 0;
+}
