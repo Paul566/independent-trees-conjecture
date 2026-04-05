@@ -7,11 +7,69 @@
 #include "Graph.h"
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
+
+namespace {
+
+std::vector<int> SampleDistinctIndices(
+    std::mt19937 *rng, int total_size, int sample_size) {
+    std::vector<int> indices(total_size);
+    std::iota(indices.begin(), indices.end(), 0);
+    std::shuffle(indices.begin(), indices.end(), *rng);
+    indices.resize(sample_size);
+    return indices;
+}
+
+std::vector<int> SampleDistinctIndicesWithRequiredElement(
+    std::mt19937 *rng, int total_size, int sample_size,
+    const std::vector<bool> &is_required_candidate) {
+    std::vector<int> required_candidates;
+    std::vector<int> optional_candidates;
+    required_candidates.reserve(total_size);
+    optional_candidates.reserve(total_size);
+    for (int index = 0; index < total_size; ++index) {
+        if (is_required_candidate[index]) {
+            required_candidates.push_back(index);
+        } else {
+            optional_candidates.push_back(index);
+        }
+    }
+
+    if (required_candidates.empty()) {
+        throw std::logic_error("No valid required element exists for sampling");
+    }
+    if (sample_size <= 0 || sample_size > total_size) {
+        throw std::invalid_argument("Sample size must be between 1 and total size");
+    }
+
+    std::shuffle(required_candidates.begin(), required_candidates.end(), *rng);
+    std::shuffle(optional_candidates.begin(), optional_candidates.end(), *rng);
+
+    std::vector<int> sampled_indices;
+    sampled_indices.reserve(sample_size);
+    sampled_indices.push_back(required_candidates.front());
+
+    std::vector<int> remaining_candidates;
+    remaining_candidates.reserve(total_size - 1);
+    for (int index = 0; index < total_size; ++index) {
+        if (index != sampled_indices.front()) {
+            remaining_candidates.push_back(index);
+        }
+    }
+    std::shuffle(remaining_candidates.begin(), remaining_candidates.end(), *rng);
+    remaining_candidates.resize(sample_size - 1);
+    sampled_indices.insert(
+        sampled_indices.end(), remaining_candidates.begin(),
+        remaining_candidates.end());
+    return sampled_indices;
+}
+
+}  // namespace
 
 GraphGenerator::GraphGenerator(std::mt19937::result_type seed) : rng_(seed) {
 }
@@ -45,6 +103,44 @@ std::unique_ptr<Graph> GraphGenerator::GenerateRandomGraph(int n, int m) {
         }
         graph->AddEdge(u, v);
     }
+    return graph;
+}
+
+std::unique_ptr<Graph> GraphGenerator::RandomPinchingOddGraph(
+    int n, int connectivity) {
+    if (n < 2 || n % 2 != 0) {
+        throw std::invalid_argument(
+            "Odd pinching construction requires an even number of vertices >= 2");
+    }
+    if (connectivity <= 1 || connectivity % 2 == 0) {
+        throw std::invalid_argument(
+            "Connectivity must be an odd integer >= 3");
+    }
+
+    const int pinch_size = connectivity / 2;
+    auto graph = std::make_unique<Graph>(2);
+    for (int i = 0; i < connectivity; ++i) {
+        graph->AddEdge(0, 1);
+    }
+
+    for (int step = 0; step < (n - 2) / 2; ++step) {
+        const std::vector<int> first_edges =
+            SampleDistinctIndices(&rng_, graph->NumEdges(), pinch_size);
+        graph->Pinch(first_edges);
+        const int u = graph->NumVertices() - 1;
+
+        std::vector<bool> not_incident_to_u(graph->NumEdges(), true);
+        for (const int edge_index : graph->adj_list[u]) {
+            not_incident_to_u[edge_index] = false;
+        }
+        const std::vector<int> second_edges =
+            SampleDistinctIndicesWithRequiredElement(
+                &rng_, graph->NumEdges(), pinch_size, not_incident_to_u);
+        graph->Pinch(second_edges);
+        const int v = graph->NumVertices() - 1;
+        graph->AddEdge(u, v);
+    }
+
     return graph;
 }
 

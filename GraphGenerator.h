@@ -16,6 +16,7 @@ class GraphGenerator {
 
         std::unique_ptr<Graph> GenerateRandomGraph(int n, int m);
         std::unique_ptr<Graph> RandomPinchingGraph(int n, int connectivity);
+        std::unique_ptr<Graph> RandomPinchingOddGraph(int n, int connectivity);
 
     private:
         std::mt19937 rng_;

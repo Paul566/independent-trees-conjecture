@@ -21,6 +21,10 @@ int EdgeCount(const Graph &graph) {
     return graph.NumEdges();
 }
 
+int Degree(const Graph &graph, int vertex) {
+    return static_cast<int>(graph.adj_list[vertex].size());
+}
+
 bool HasSelfLoop(const Graph &graph) {
     for (const Edge &edge : graph.edges) {
         if (edge.head == edge.tail) {
@@ -364,6 +368,54 @@ void TestRandomPinchingGraphOnManySeeds() {
     }
 }
 
+void TestRandomPinchingOddGraphRejectsInvalidArguments() {
+    GraphGenerator generator(13);
+
+    bool threw = false;
+    try {
+        generator.RandomPinchingOddGraph(5, 3);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.RandomPinchingOddGraph(6, 4);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.RandomPinchingOddGraph(6, 1);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestRandomPinchingOddGraphOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 5;
+    constexpr int kExpectedEdges = kNumVertices * kConnectivity / 2;
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.RandomPinchingOddGraph(kNumVertices, kConnectivity);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
 void TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs() {
     std::mt19937 rng(20260405u);
     std::uniform_int_distribution<int> vertex_distribution(2, 5);
@@ -422,6 +474,8 @@ int main() {
     TestConnectivityMatchesBruteForceOnRandomGraphs();
     TestRandomPinchingGraphRejectsInvalidArguments();
     TestRandomPinchingGraphOnManySeeds();
+    TestRandomPinchingOddGraphRejectsInvalidArguments();
+    TestRandomPinchingOddGraphOnManySeeds();
     TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs();
     return 0;
 }
