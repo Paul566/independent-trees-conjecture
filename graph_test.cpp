@@ -4,9 +4,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -23,6 +28,54 @@ bool HasSelfLoop(const Graph &graph) {
         }
     }
     return false;
+}
+
+Graph ExtractSubgraph(
+    const Graph &graph, const std::vector<bool> &edge_partition,
+    bool use_one_edges) {
+    Graph subgraph(graph.NumVertices());
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        if (edge_partition[edge_index] != use_one_edges) {
+            continue;
+        }
+        const Edge &edge = graph.edges[edge_index];
+        subgraph.AddEdge(edge.head, edge.tail);
+    }
+    return subgraph;
+}
+
+bool IsValidDecomposition(
+    const Graph &graph, const std::vector<bool> &edge_partition,
+    int connectivity_first, int connectivity_second) {
+    if (static_cast<int>(edge_partition.size()) != graph.NumEdges()) {
+        return false;
+    }
+
+    const Graph first_subgraph = ExtractSubgraph(graph, edge_partition, false);
+    const Graph second_subgraph = ExtractSubgraph(graph, edge_partition, true);
+    return first_subgraph.Connectivity() >= connectivity_first &&
+           second_subgraph.Connectivity() >= connectivity_second;
+}
+
+std::optional<std::vector<bool> > BruteForceDecomposition(
+    const Graph &graph, int connectivity_first, int connectivity_second) {
+    if (graph.NumEdges() >= static_cast<int>(sizeof(std::uint64_t) * 8)) {
+        throw std::invalid_argument("Brute-force decomposition is only for small graphs");
+    }
+
+    const std::uint64_t num_partitions = std::uint64_t{1} << graph.NumEdges();
+    for (std::uint64_t mask = 0; mask < num_partitions; ++mask) {
+        std::vector<bool> edge_partition(graph.NumEdges(), false);
+        for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+            edge_partition[edge_index] =
+                ((mask >> edge_index) & std::uint64_t{1}) != 0;
+        }
+        if (IsValidDecomposition(
+                graph, edge_partition, connectivity_first, connectivity_second)) {
+            return edge_partition;
+        }
+    }
+    return std::nullopt;
 }
 
 int BruteForceConnectivity(const Graph &graph) {
@@ -192,6 +245,50 @@ void TestPinchUpdatesGraphStructure() {
     assert(!HasSelfLoop(graph));
 }
 
+void TestExportGraphWritesExpectedFormat() {
+    Graph graph(4);
+    graph.AddEdge(0, 1);
+    graph.AddEdge(1, 3);
+    graph.AddEdge(1, 3);
+
+    const std::filesystem::path output_path =
+        std::filesystem::temp_directory_path() / "graph_export_test.txt";
+    graph.ExportGraph(output_path.string());
+
+    std::ifstream input(output_path);
+    assert(input.is_open());
+
+    std::ostringstream content;
+    content << input.rdbuf();
+    assert(content.str() == "4\n0 1\n1 3\n1 3\n");
+
+    std::filesystem::remove(output_path);
+}
+
+void TestDecomposeConnectivityOnKnownGraphs() {
+    Graph double_edge({{0, 1}, {0, 1}});
+    const std::optional<std::vector<bool> > two_trees =
+        double_edge.DecomposeConnectivity(1, 1);
+    assert(two_trees.has_value());
+    assert(IsValidDecomposition(double_edge, *two_trees, 1, 1));
+
+    Graph triple_edge({{0, 1}, {0, 1}, {0, 1}});
+    const std::optional<std::vector<bool> > split_21 =
+        triple_edge.DecomposeConnectivity(2, 1);
+    assert(split_21.has_value());
+    assert(IsValidDecomposition(triple_edge, *split_21, 2, 1));
+
+    Graph cycle({{0, 1}, {1, 2}, {2, 3}, {3, 0}});
+    assert(!cycle.DecomposeConnectivity(1, 1).has_value());
+
+    Graph k4({{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}});
+    const std::optional<std::vector<bool> > k4_decomposition =
+        k4.DecomposeConnectivity(1, 1);
+    assert(k4_decomposition.has_value());
+    assert(IsValidDecomposition(k4, *k4_decomposition, 1, 1));
+}
+
+
 void TestRandomGraphGenerationOnManySeeds() {
     for (std::uint32_t seed = 0; seed < 100; ++seed) {
         GraphGenerator generator(seed);
@@ -267,6 +364,46 @@ void TestRandomPinchingGraphOnManySeeds() {
     }
 }
 
+void TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs() {
+    std::mt19937 rng(20260405u);
+    std::uniform_int_distribution<int> vertex_distribution(2, 5);
+    std::uniform_int_distribution<int> edge_distribution(0, 8);
+
+    for (int iteration = 0; iteration < 80; ++iteration) {
+        const int num_vertices = vertex_distribution(rng);
+        const int num_edges = edge_distribution(rng);
+
+        Graph graph(num_vertices);
+        std::uniform_int_distribution<int> endpoint_distribution(0, num_vertices - 1);
+        for (int edge_index = 0; edge_index < num_edges; ++edge_index) {
+            const int u = endpoint_distribution(rng);
+            int v = endpoint_distribution(rng);
+            while (v == u) {
+                v = endpoint_distribution(rng);
+            }
+            graph.AddEdge(u, v);
+        }
+
+        for (int connectivity_first = 0; connectivity_first <= 2;
+             ++connectivity_first) {
+            for (int connectivity_second = 0; connectivity_second <= 2;
+                 ++connectivity_second) {
+                const std::optional<std::vector<bool> > expected =
+                    BruteForceDecomposition(
+                        graph, connectivity_first, connectivity_second);
+                const std::optional<std::vector<bool> > actual =
+                    graph.DecomposeConnectivity(
+                        connectivity_first, connectivity_second);
+                assert(expected.has_value() == actual.has_value());
+                if (actual.has_value()) {
+                    assert(IsValidDecomposition(
+                        graph, *actual, connectivity_first, connectivity_second));
+                }
+            }
+        }
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -279,9 +416,12 @@ int main() {
     TestRandomGraphGenerationRejectsEdgesOnEmptyVertexSet();
     TestRandomGraphGenerationRejectsEdgesOnSingleVertex();
     TestPinchUpdatesGraphStructure();
+    TestExportGraphWritesExpectedFormat();
+    TestDecomposeConnectivityOnKnownGraphs();
     TestRandomGraphGenerationOnManySeeds();
     TestConnectivityMatchesBruteForceOnRandomGraphs();
     TestRandomPinchingGraphRejectsInvalidArguments();
     TestRandomPinchingGraphOnManySeeds();
+    TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs();
     return 0;
 }

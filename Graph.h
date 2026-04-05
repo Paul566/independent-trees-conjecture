@@ -5,6 +5,8 @@
 #ifndef INDEPENDENT_TREES_CONJECTURE_GRAPH_H
 #define INDEPENDENT_TREES_CONJECTURE_GRAPH_H
 
+#include <optional>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -20,9 +22,12 @@ class Graph {
         explicit Graph(const std::vector<std::tuple<int, int> > &edges);
 
         [[nodiscard]] int Connectivity() const;
+        [[nodiscard]] std::optional<std::vector<bool> > DecomposeConnectivity(
+            int connectivity_first, int connectivity_second) const;
         [[nodiscard]] int NumEdges() const;
         [[nodiscard]] int NumVertices() const;
         void AddEdge(int u, int v);
+        void ExportGraph(const std::string &path) const;
         void Pinch(const std::vector<int> &edge_indices);
 
         std::vector<Edge> edges;

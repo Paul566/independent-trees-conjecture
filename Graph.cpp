@@ -5,16 +5,29 @@
 #include "Graph.h"
 
 #include <boost/graph/adjacency_list.hpp>
+#include <boost/property_map/property_map.hpp>
 #include <boost/graph/stoer_wagner_min_cut.hpp>
+#include <ortools/sat/cp_model.h>
 
 #include <algorithm>
+#include <fstream>
 #include <map>
+#include <optional>
 #include <queue>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace {
+
+using CpModelBuilder = operations_research::sat::CpModelBuilder;
+using BoolVar = operations_research::sat::BoolVar;
+using CpSolverResponse = operations_research::sat::CpSolverResponse;
+using CpSolverStatus = operations_research::sat::CpSolverStatus;
+using LinearExpr = operations_research::sat::LinearExpr;
+using operations_research::sat::SolutionBooleanValue;
+using operations_research::sat::Solve;
 
 int OtherEndpoint(const Edge &edge, int vertex) {
     if (edge.head == vertex) {
@@ -61,6 +74,66 @@ bool IsConnected(const Graph &graph) {
     return std::all_of(visited.begin(), visited.end(), [](const bool seen) {
         return seen;
     });
+}
+
+struct CutResult {
+    int cut_value;
+    std::vector<int> crossing_edges;
+};
+
+CutResult FindMinimumWeightedCut(
+    const Graph &graph, const std::vector<int> &edge_weights) {
+    using BoostGraph = boost::adjacency_list<
+        boost::vecS, boost::vecS, boost::undirectedS, boost::no_property,
+        boost::property<boost::edge_weight_t, int> >;
+
+    if (graph.NumVertices() <= 1) {
+        return {0, {}};
+    }
+
+    BoostGraph weighted_graph(graph.NumVertices());
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        const Edge &edge = graph.edges[edge_index];
+        boost::add_edge(edge.head, edge.tail, edge_weights[edge_index], weighted_graph);
+    }
+
+    std::vector<int> partition(graph.NumVertices(), 0);
+    const auto parity_map = boost::make_iterator_property_map(
+        partition.begin(), get(boost::vertex_index, weighted_graph));
+    const int cut_value = boost::stoer_wagner_min_cut(
+        weighted_graph, get(boost::edge_weight, weighted_graph),
+        boost::parity_map(parity_map));
+
+    std::vector<int> crossing_edges;
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        const Edge &edge = graph.edges[edge_index];
+        if (partition[edge.head] != partition[edge.tail]) {
+            crossing_edges.push_back(edge_index);
+        }
+    }
+
+    return {cut_value, crossing_edges};
+}
+
+std::optional<std::vector<int> > FindViolatingCut(
+    const Graph &graph, const std::vector<bool> &edge_partition,
+    bool use_one_edges, int required_connectivity) {
+    if (required_connectivity <= 0 || graph.NumVertices() <= 1) {
+        return std::nullopt;
+    }
+
+    std::vector<int> edge_weights(graph.NumEdges(), 0);
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        if (edge_partition[edge_index] == use_one_edges) {
+            edge_weights[edge_index] = 1;
+        }
+    }
+
+    const CutResult cut = FindMinimumWeightedCut(graph, edge_weights);
+    if (cut.cut_value >= required_connectivity) {
+        return std::nullopt;
+    }
+    return cut.crossing_edges;
 }
 
 }  // namespace
@@ -118,6 +191,87 @@ int Graph::Connectivity() const {
     return boost::stoer_wagner_min_cut(graph, boost::get(boost::edge_weight, graph));
 }
 
+std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
+    int connectivity_first, int connectivity_second) const {
+    if (connectivity_first < 0 || connectivity_second < 0) {
+        throw std::invalid_argument("Connectivity requirements must be non-negative");
+    }
+    if (NumVertices() <= 1) {
+        if (connectivity_first == 0 && connectivity_second == 0) {
+            return std::vector<bool>(NumEdges(), false);
+        }
+        return std::nullopt;
+    }
+
+    CpModelBuilder model;
+    std::vector<BoolVar> edge_in_second;
+    edge_in_second.reserve(NumEdges());
+    for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+        edge_in_second.push_back(model.NewBoolVar());
+    }
+
+    for (int vertex = 0; vertex < NumVertices(); ++vertex) {
+        std::vector<BoolVar> incident_variables;
+        incident_variables.reserve(adj_list[vertex].size());
+        for (const int edge_index : adj_list[vertex]) {
+            incident_variables.push_back(edge_in_second[edge_index]);
+        }
+
+        if (connectivity_first > 0) {
+            model.AddLessOrEqual(
+                LinearExpr::Sum(incident_variables),
+                static_cast<int64_t>(adj_list[vertex].size()) - connectivity_first);
+        }
+        if (connectivity_second > 0) {
+            model.AddGreaterOrEqual(
+                LinearExpr::Sum(incident_variables), connectivity_second);
+        }
+    }
+
+    while (true) {
+        const CpSolverResponse response = Solve(model.Build());
+        if (response.status() != CpSolverStatus::FEASIBLE &&
+            response.status() != CpSolverStatus::OPTIMAL) {
+            return std::nullopt;
+        }
+
+        std::vector<bool> edge_partition(NumEdges(), false);
+        for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+            edge_partition[edge_index] =
+                SolutionBooleanValue(response, edge_in_second[edge_index]);
+        }
+
+        const std::optional<std::vector<int> > first_cut = FindViolatingCut(
+            *this, edge_partition, false, connectivity_first);
+        if (first_cut.has_value()) {
+            std::vector<BoolVar> cut_variables;
+            cut_variables.reserve(first_cut->size());
+            for (const int edge_index : *first_cut) {
+                cut_variables.push_back(edge_in_second[edge_index]);
+            }
+            model.AddLessOrEqual(
+                LinearExpr::Sum(cut_variables),
+                static_cast<int64_t>(first_cut->size()) - connectivity_first);
+            continue;
+        }
+
+        const std::optional<std::vector<int> > second_cut = FindViolatingCut(
+            *this, edge_partition, true, connectivity_second);
+        if (second_cut.has_value()) {
+            std::vector<BoolVar> cut_variables;
+            cut_variables.reserve(second_cut->size());
+            for (const int edge_index : *second_cut) {
+                cut_variables.push_back(edge_in_second[edge_index]);
+            }
+            model.AddGreaterOrEqual(
+                LinearExpr::Sum(cut_variables), connectivity_second);
+            continue;
+        }
+
+        return edge_partition;
+    }
+}
+
 int Graph::NumEdges() const {
     return static_cast<int>(edges.size());
 }
@@ -141,6 +295,18 @@ void Graph::AddEdge(int u, int v) {
     edges.push_back({u, v});
     adj_list[u].push_back(edge_index);
     adj_list[v].push_back(edge_index);
+}
+
+void Graph::ExportGraph(const std::string &path) const {
+    std::ofstream output(path);
+    if (!output.is_open()) {
+        throw std::runtime_error("Failed to open graph export file");
+    }
+
+    output << NumVertices() << "\n";
+    for (const Edge &edge : edges) {
+        output << edge.head << " " << edge.tail << "\n";
+    }
 }
 
 void Graph::Pinch(const std::vector<int> &edge_indices) {
