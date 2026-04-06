@@ -416,6 +416,60 @@ void TestRandomPinchingOddGraphOnManySeeds() {
     }
 }
 
+void TestAdversarialPinchingEvenGraphRejectsInvalidArguments() {
+    GraphGenerator generator(17);
+
+    bool threw = false;
+    try {
+        generator.AdversarialPinchingEvenGraph(1, 2, 4, false);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.AdversarialPinchingEvenGraph(8, 4, 2, false);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.AdversarialPinchingEvenGraph(8, 2, 3, false);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestAdversarialPinchingEvenGraphReturnsNullAtMaxSize() {
+    GraphGenerator generator(19);
+    const std::unique_ptr<Graph> graph =
+        generator.AdversarialPinchingEvenGraph(2, 2, 4, true);
+    assert(graph == nullptr);
+}
+
+void TestAdversarialPinchingEvenGraphContractOnManySeeds() {
+    for (std::uint32_t seed = 0; seed < 50; ++seed) {
+        for (const bool pinch_from_first_factor : {false, true}) {
+            GraphGenerator generator(seed);
+            const std::unique_ptr<Graph> graph =
+                generator.AdversarialPinchingEvenGraph(
+                    8, 2, 4, pinch_from_first_factor);
+
+            if (!graph) {
+                continue;
+            }
+            assert(graph->NumVertices() <= 8);
+            assert(!HasSelfLoop(*graph));
+            assert(graph->Connectivity() == 6);
+            assert(!graph->DecomposeConnectivity(2, 4).has_value());
+        }
+    }
+}
+
 void TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs() {
     std::mt19937 rng(20260405u);
     std::uniform_int_distribution<int> vertex_distribution(2, 5);
@@ -476,6 +530,9 @@ int main() {
     TestRandomPinchingGraphOnManySeeds();
     TestRandomPinchingOddGraphRejectsInvalidArguments();
     TestRandomPinchingOddGraphOnManySeeds();
+    TestAdversarialPinchingEvenGraphRejectsInvalidArguments();
+    TestAdversarialPinchingEvenGraphReturnsNullAtMaxSize();
+    TestAdversarialPinchingEvenGraphContractOnManySeeds();
     TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs();
     return 0;
 }

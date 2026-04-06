@@ -171,3 +171,56 @@ std::unique_ptr<Graph> GraphGenerator::RandomPinchingGraph(
 
     return graph;
 }
+
+std::unique_ptr<Graph> GraphGenerator::AdversarialPinchingEvenGraph(
+    int n_max, int a, int b, bool pinch_from_first_factor) {
+    if (n_max < 2) {
+        throw std::invalid_argument("Adversarial pinching requires n_max >= 2");
+    }
+    if (a < 0 || b < 0) {
+        throw std::invalid_argument("Connectivity parameters must be non-negative");
+    }
+    if (b < a) {
+        throw std::invalid_argument("This generator requires b >= a");
+    }
+    if ((a + b) <= 0 || (a + b) % 2 != 0) {
+        throw std::invalid_argument("a + b must be a positive even integer");
+    }
+
+    const int total_connectivity = a + b;
+    const int pinch_size = total_connectivity / 2;
+    auto graph = std::make_unique<Graph>(2);
+    for (int i = 0; i < total_connectivity; ++i) {
+        graph->AddEdge(0, 1);
+    }
+
+    while (true) {
+        const std::optional<std::vector<bool> > decomposition =
+            graph->DecomposeConnectivity(a, b);
+        if (!decomposition.has_value()) {
+            return graph;
+        }
+        if (graph->NumVertices() >= n_max) {
+            return nullptr;
+        }
+
+        std::vector<int> chosen_factor_edges;
+        chosen_factor_edges.reserve(graph->NumEdges());
+        for (int edge_index = 0; edge_index < graph->NumEdges(); ++edge_index) {
+            if ((*decomposition)[edge_index] == !pinch_from_first_factor) {
+                chosen_factor_edges.push_back(edge_index);
+            }
+        }
+
+        if (static_cast<int>(chosen_factor_edges.size()) >= pinch_size) {
+            std::shuffle(chosen_factor_edges.begin(), chosen_factor_edges.end(), rng_);
+            chosen_factor_edges.resize(pinch_size);
+            graph->Pinch(chosen_factor_edges);
+            continue;
+        }
+
+        std::vector<int> random_edges =
+            SampleDistinctIndices(&rng_, graph->NumEdges(), pinch_size);
+        graph->Pinch(random_edges);
+    }
+}

@@ -7,37 +7,43 @@
 #include <memory>
 
 int main() {
-    constexpr int kMinVertices = 4;
-    constexpr int kMaxVertices = 16;
-    constexpr int kConnectivity = 5;
-    // constexpr int kFirstConnectivity = 2;
-    // constexpr int kSecondConnectivity = 2;
+    constexpr int kMaxVertices = 50;
+    constexpr int kFirstConnectivity = 2;
+    constexpr int kSecondConnectivity = 4;
+    constexpr int kNumAttempts = 10000;
 
     const std::filesystem::path output_directory =
-        "graphs/non_decomposable_random_pinched";
+        "graphs/non_decomposable_adversarial_even_pinched";
     std::filesystem::create_directories(output_directory);
 
-    GraphGenerator generator(1);
-    for (int i = 0; i < 10000; ++i) {
-        std::unique_ptr<Graph> graph =
-            generator.RandomPinchingOddGraph(12, 7);
-
-        std::optional<std::vector<bool> > decomposition = graph->DecomposeConnectivity(2, 5);
-        if (!decomposition.has_value()) {
-            std::cout << " " << i << " no 25 " << std::endl;
+    GraphGenerator generator(4);
+    for (int attempt = 0; attempt < kNumAttempts; ++attempt) {
+        if (attempt % 100 == 0) {
+            std::cout << "attempt=" << attempt << std::endl;
+        }
+        std::unique_ptr<Graph> graph = generator.AdversarialPinchingEvenGraph(
+            kMaxVertices, kFirstConnectivity, kSecondConnectivity, true);
+        if (!graph) {
+            continue;
         }
 
-        decomposition = graph->DecomposeConnectivity(3, 4);
-        if (!decomposition.has_value()) {
-            std::cout << " " << i << " no 34 " << std::endl;
-        }
+        std::cout << "Found graph on attempt " << attempt
+                  << " with " << graph->NumVertices() << " vertices and "
+                  << graph->NumEdges() << " edges.\n";
+        graph->ExportGraph((output_directory / "graph.txt").string());
 
-        // graph->ExportGraph((output_directory / "graph.txt").string());
-
-        if (i % 100 == 0) {
-            std::cout << i << std::endl;
-        }
+        std::ofstream metadata(output_directory / "metadata.txt");
+        metadata << "attempt=" << attempt << "\n";
+        metadata << "num_vertices=" << graph->NumVertices() << "\n";
+        metadata << "num_edges=" << graph->NumEdges() << "\n";
+        metadata << "connectivity=" << graph->Connectivity() << "\n";
+        metadata << "decomposition_exists="
+                 << graph->DecomposeConnectivity(
+                        kFirstConnectivity, kSecondConnectivity).has_value()
+                 << "\n";
+        return 0;
     }
 
+    std::cout << "No graph found in " << kNumAttempts << " attempts.\n";
     return 0;
 }
