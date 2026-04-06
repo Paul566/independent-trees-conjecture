@@ -15,6 +15,7 @@
 #include <optional>
 #include <queue>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -163,6 +164,46 @@ Graph::Graph(const std::vector<std::tuple<int, int> > &edges) {
     adj_list.resize(max_vertex + 1);
     for (const auto &[u, v] : edges) {
         AddEdge(u, v);
+    }
+}
+
+Graph::Graph(const std::filesystem::path &path) {
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        throw std::runtime_error("Failed to open graph file");
+    }
+
+    std::string line;
+    if (!std::getline(input, line)) {
+        throw std::invalid_argument("Graph file is empty");
+    }
+
+    std::istringstream header_stream(line);
+    int num_vertices = -1;
+    if (!(header_stream >> num_vertices) || num_vertices < 0) {
+        throw std::invalid_argument("Graph file has an invalid vertex count");
+    }
+    std::string trailing_text;
+    if (header_stream >> trailing_text) {
+        throw std::invalid_argument("Graph file header must contain only the vertex count");
+    }
+
+    adj_list.resize(num_vertices);
+    while (std::getline(input, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        std::istringstream edge_stream(line);
+        int head = -1;
+        int tail = -1;
+        if (!(edge_stream >> head >> tail)) {
+            throw std::invalid_argument("Graph file contains an invalid edge");
+        }
+        if (edge_stream >> trailing_text) {
+            throw std::invalid_argument("Graph file edge lines must contain exactly two integers");
+        }
+        AddEdge(head, tail);
     }
 }
 

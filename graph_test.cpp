@@ -125,7 +125,7 @@ void TestGraphConstructsFromEdges() {
 void TestGraphRejectsNegativeEndpoints() {
     bool threw = false;
     try {
-        Graph graph({{-1, 0}});
+        Graph graph(std::vector<std::tuple<int, int> >{{-1, 0}});
     } catch (const std::invalid_argument &) {
         threw = true;
     }
@@ -135,7 +135,7 @@ void TestGraphRejectsNegativeEndpoints() {
 void TestGraphRejectsLoops() {
     bool threw = false;
     try {
-        Graph graph({{0, 0}});
+        Graph graph(std::vector<std::tuple<int, int> >{{0, 0}});
     } catch (const std::invalid_argument &) {
         threw = true;
     }
@@ -265,6 +265,26 @@ void TestExportGraphWritesExpectedFormat() {
     std::ostringstream content;
     content << input.rdbuf();
     assert(content.str() == "4\n0 1\n1 3\n1 3\n");
+
+    std::filesystem::remove(output_path);
+}
+
+void TestGraphConstructsFromExportedFile() {
+    Graph original_graph(5);
+    original_graph.AddEdge(0, 1);
+    original_graph.AddEdge(1, 3);
+    original_graph.AddEdge(1, 3);
+    original_graph.AddEdge(2, 4);
+
+    const std::filesystem::path output_path =
+        std::filesystem::temp_directory_path() / "graph_round_trip_test.txt";
+    original_graph.ExportGraph(output_path.string());
+
+    const Graph imported_graph(output_path.string());
+    assert(imported_graph.NumVertices() == original_graph.NumVertices());
+    assert(imported_graph.NumEdges() == original_graph.NumEdges());
+    assert(imported_graph.edges == original_graph.edges);
+    assert(imported_graph.adj_list == original_graph.adj_list);
 
     std::filesystem::remove(output_path);
 }
@@ -564,6 +584,7 @@ int main() {
     TestRandomGraphGenerationRejectsEdgesOnSingleVertex();
     TestPinchUpdatesGraphStructure();
     TestExportGraphWritesExpectedFormat();
+    TestGraphConstructsFromExportedFile();
     TestDecomposeConnectivityOnKnownGraphs();
     TestRandomGraphGenerationOnManySeeds();
     TestConnectivityMatchesBruteForceOnRandomGraphs();

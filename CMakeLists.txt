@@ -53,3 +53,4 @@ set_target_properties(graph_test PROPERTIES
 
 add_test(NAME graph_test COMMAND graph_test)
 add_test(NAME draw_graph_test COMMAND ${Python3_EXECUTABLE} scripts/draw_graph_test.py)
+add_test(NAME count_spanning_trees_test COMMAND ${Python3_EXECUTABLE} scripts/count_spanning_trees_test.py)

@@ -5,6 +5,7 @@
 #ifndef INDEPENDENT_TREES_CONJECTURE_GRAPH_H
 #define INDEPENDENT_TREES_CONJECTURE_GRAPH_H
 
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -13,6 +14,8 @@
 struct Edge {
     int head;
     int tail;
+
+    bool operator==(const Edge &) const = default;
 };
 
 class Graph {
@@ -20,6 +23,7 @@ class Graph {
         Graph();
         explicit Graph(int num_vertices);
         explicit Graph(const std::vector<std::tuple<int, int> > &edges);
+        explicit Graph(const std::filesystem::path &path);
 
         [[nodiscard]] int Connectivity() const;
         [[nodiscard]] std::optional<std::vector<bool> > DecomposeConnectivity(
