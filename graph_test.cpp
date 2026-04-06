@@ -2,13 +2,16 @@
 #include "GraphGenerator.h"
 
 #include <algorithm>
+#include <bit>
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <limits>
 #include <optional>
+#include <queue>
 #include <random>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -16,6 +19,16 @@
 #include <vector>
 
 namespace {
+
+int OtherEndpointInTest(const Edge &edge, int vertex) {
+    if (edge.head == vertex) {
+        return edge.tail;
+    }
+    if (edge.tail == vertex) {
+        return edge.head;
+    }
+    throw std::invalid_argument("Vertex is not incident to the edge");
+}
 
 int EdgeCount(const Graph &graph) {
     return graph.NumEdges();
@@ -32,6 +45,91 @@ bool HasSelfLoop(const Graph &graph) {
         }
     }
     return false;
+}
+
+int ParentVertex(
+    const Graph &graph, const RootedSpanningTree &tree, int vertex, int root) {
+    if (vertex == root || tree[vertex] < 0 || tree[vertex] >= graph.NumEdges()) {
+        throw std::invalid_argument("Tree has an invalid parent edge");
+    }
+    return OtherEndpointInTest(graph.edges[tree[vertex]], vertex);
+}
+
+std::vector<int> PathEdgesToRoot(
+    const Graph &graph, const RootedSpanningTree &tree, int root, int vertex) {
+    std::vector<int> path_edges;
+    std::vector<bool> visited(graph.NumVertices(), false);
+    int current = vertex;
+    while (current != root) {
+        if (visited[current]) {
+            throw std::invalid_argument("Tree path contains a cycle");
+        }
+        visited[current] = true;
+        const int parent_edge = tree[current];
+        if (parent_edge < 0 || parent_edge >= graph.NumEdges()) {
+            throw std::invalid_argument("Tree path is missing a parent edge");
+        }
+        path_edges.push_back(parent_edge);
+        current = ParentVertex(graph, tree, current, root);
+    }
+    return path_edges;
+}
+
+bool IsValidEdgeIndependentTree(
+    const Graph &graph, const RootedSpanningTree &tree, int root) {
+    if (static_cast<int>(tree.size()) != graph.NumVertices()) {
+        return false;
+    }
+    if (tree[root] != -1) {
+        return false;
+    }
+
+    std::set<int> used_edges;
+    for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
+        if (vertex == root) {
+            continue;
+        }
+        if (tree[vertex] < 0 || tree[vertex] >= graph.NumEdges()) {
+            return false;
+        }
+        const Edge &edge = graph.edges[tree[vertex]];
+        if (edge.head != vertex && edge.tail != vertex) {
+            return false;
+        }
+        used_edges.insert(tree[vertex]);
+        try {
+            static_cast<void>(PathEdgesToRoot(graph, tree, root, vertex));
+        } catch (const std::invalid_argument &) {
+            return false;
+        }
+    }
+    return static_cast<int>(used_edges.size()) == graph.NumVertices() - 1;
+}
+
+bool AreValidEdgeIndependentTrees(
+    const Graph &graph, const std::vector<RootedSpanningTree> &trees, int root) {
+    for (const RootedSpanningTree &tree : trees) {
+        if (!IsValidEdgeIndependentTree(graph, tree, root)) {
+            return false;
+        }
+    }
+
+    for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
+        if (vertex == root) {
+            continue;
+        }
+        std::set<int> used_path_edges;
+        for (const RootedSpanningTree &tree : trees) {
+            const std::vector<int> path_edges =
+                PathEdgesToRoot(graph, tree, root, vertex);
+            for (const int edge_index : path_edges) {
+                if (!used_path_edges.insert(edge_index).second) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
 }
 
 Graph ExtractSubgraph(
@@ -78,6 +176,97 @@ std::optional<std::vector<bool> > BruteForceDecomposition(
                 graph, edge_partition, connectivity_first, connectivity_second)) {
             return edge_partition;
         }
+    }
+    return std::nullopt;
+}
+
+std::vector<RootedSpanningTree> EnumerateRootedSpanningTrees(
+    const Graph &graph, int root) {
+    if (graph.NumEdges() >= static_cast<int>(sizeof(std::uint64_t) * 8)) {
+        throw std::invalid_argument("Brute-force tree enumeration is only for small graphs");
+    }
+
+    std::vector<RootedSpanningTree> rooted_trees;
+    const std::uint64_t mask_limit = std::uint64_t{1} << graph.NumEdges();
+    for (std::uint64_t mask = 0; mask < mask_limit; ++mask) {
+        if (std::popcount(mask) != graph.NumVertices() - 1) {
+            continue;
+        }
+
+        RootedSpanningTree tree(graph.NumVertices(), -1);
+        std::vector<bool> visited(graph.NumVertices(), false);
+        std::queue<int> to_visit;
+        to_visit.push(root);
+        visited[root] = true;
+        while (!to_visit.empty()) {
+            const int vertex = to_visit.front();
+            to_visit.pop();
+            for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+                if (((mask >> edge_index) & std::uint64_t{1}) == 0) {
+                    continue;
+                }
+                const Edge &edge = graph.edges[edge_index];
+                int neighbor = -1;
+                if (edge.head == vertex) {
+                    neighbor = edge.tail;
+                } else if (edge.tail == vertex) {
+                    neighbor = edge.head;
+                } else {
+                    continue;
+                }
+
+                if (visited[neighbor]) {
+                    continue;
+                }
+                visited[neighbor] = true;
+                tree[neighbor] = edge_index;
+                to_visit.push(neighbor);
+            }
+        }
+        if (std::all_of(visited.begin(), visited.end(), [](bool value) { return value; })) {
+            rooted_trees.push_back(tree);
+        }
+    }
+    return rooted_trees;
+}
+
+bool BruteForceEdgeIndependentTreesSearch(
+    const Graph &graph, const std::vector<RootedSpanningTree> &candidate_trees,
+    int root, int k, std::vector<RootedSpanningTree> *chosen_trees) {
+    if (static_cast<int>(chosen_trees->size()) == k) {
+        return AreValidEdgeIndependentTrees(graph, *chosen_trees, root);
+    }
+
+    for (const RootedSpanningTree &tree : candidate_trees) {
+        chosen_trees->push_back(tree);
+        if (AreValidEdgeIndependentTrees(graph, *chosen_trees, root) &&
+            BruteForceEdgeIndependentTreesSearch(
+                graph, candidate_trees, root, k, chosen_trees)) {
+            return true;
+        }
+        chosen_trees->pop_back();
+    }
+    return false;
+}
+
+std::optional<std::vector<RootedSpanningTree> > BruteForceEdgeIndependentTrees(
+    const Graph &graph, int k, int root) {
+    if (k < 0) {
+        throw std::invalid_argument("Number of trees must be non-negative");
+    }
+    if (k == 0) {
+        return std::vector<RootedSpanningTree>();
+    }
+    if (graph.NumVertices() == 1) {
+        return std::vector<RootedSpanningTree>(k, RootedSpanningTree(1, -1));
+    }
+
+    const std::vector<RootedSpanningTree> candidate_trees =
+        EnumerateRootedSpanningTrees(graph, root);
+    std::vector<RootedSpanningTree> chosen_trees;
+    if (BruteForceEdgeIndependentTreesSearch(
+            graph, candidate_trees, root, k, &chosen_trees)) {
+        return chosen_trees;
     }
     return std::nullopt;
 }
@@ -312,6 +501,23 @@ void TestDecomposeConnectivityOnKnownGraphs() {
     assert(IsValidDecomposition(k4, *k4_decomposition, 1, 1));
 }
 
+void TestEdgeIndependentTreesOnKnownGraphs() {
+    Graph double_edge({{0, 1}, {0, 1}});
+    const std::optional<std::vector<RootedSpanningTree> > double_edge_trees =
+        double_edge.EdgeIndependentTrees(2, 0);
+    assert(double_edge_trees.has_value());
+    assert(AreValidEdgeIndependentTrees(double_edge, *double_edge_trees, 0));
+
+    Graph path({{0, 1}, {1, 2}});
+    assert(!path.EdgeIndependentTrees(2, 0).has_value());
+
+    Graph k4({{0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}});
+    const std::optional<std::vector<RootedSpanningTree> > k4_trees =
+        k4.EdgeIndependentTrees(2, 0);
+    assert(k4_trees.has_value());
+    assert(AreValidEdgeIndependentTrees(k4, *k4_trees, 0));
+}
+
 
 void TestRandomGraphGenerationOnManySeeds() {
     for (std::uint32_t seed = 0; seed < 100; ++seed) {
@@ -531,6 +737,41 @@ void TestAdversarialPinchingEvenGraphContractOnManySeeds() {
     }
 }
 
+void TestEdgeIndependentTreesMatchesBruteForceOnRandomGraphs() {
+    std::mt19937 rng(20260406u);
+    std::uniform_int_distribution<int> vertex_distribution(2, 5);
+    std::uniform_int_distribution<int> edge_distribution(0, 7);
+
+    for (int iteration = 0; iteration < 60; ++iteration) {
+        const int num_vertices = vertex_distribution(rng);
+        const int num_edges = edge_distribution(rng);
+
+        Graph graph(num_vertices);
+        std::uniform_int_distribution<int> endpoint_distribution(0, num_vertices - 1);
+        for (int edge_index = 0; edge_index < num_edges; ++edge_index) {
+            const int u = endpoint_distribution(rng);
+            int v = endpoint_distribution(rng);
+            while (v == u) {
+                v = endpoint_distribution(rng);
+            }
+            graph.AddEdge(u, v);
+        }
+
+        for (int root = 0; root < num_vertices; ++root) {
+            for (int k = 0; k <= 2; ++k) {
+                const std::optional<std::vector<RootedSpanningTree> > expected =
+                    BruteForceEdgeIndependentTrees(graph, k, root);
+                const std::optional<std::vector<RootedSpanningTree> > actual =
+                    graph.EdgeIndependentTrees(k, root);
+                assert(expected.has_value() == actual.has_value());
+                if (actual.has_value()) {
+                    assert(AreValidEdgeIndependentTrees(graph, *actual, root));
+                }
+            }
+        }
+    }
+}
+
 void TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs() {
     std::mt19937 rng(20260405u);
     std::uniform_int_distribution<int> vertex_distribution(2, 5);
@@ -586,6 +827,7 @@ int main() {
     TestExportGraphWritesExpectedFormat();
     TestGraphConstructsFromExportedFile();
     TestDecomposeConnectivityOnKnownGraphs();
+    TestEdgeIndependentTreesOnKnownGraphs();
     TestRandomGraphGenerationOnManySeeds();
     TestConnectivityMatchesBruteForceOnRandomGraphs();
     TestRandomPinchingGraphRejectsInvalidArguments();
@@ -597,6 +839,7 @@ int main() {
     TestAdversarialPinchingEvenGraphRejectsInvalidArguments();
     TestAdversarialPinchingEvenGraphReturnsNullAtMaxSize();
     TestAdversarialPinchingEvenGraphContractOnManySeeds();
+    TestEdgeIndependentTreesMatchesBruteForceOnRandomGraphs();
     TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs();
     return 0;
 }

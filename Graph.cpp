@@ -26,9 +26,11 @@ using CpModelBuilder = operations_research::sat::CpModelBuilder;
 using BoolVar = operations_research::sat::BoolVar;
 using CpSolverResponse = operations_research::sat::CpSolverResponse;
 using CpSolverStatus = operations_research::sat::CpSolverStatus;
+using IntVar = operations_research::sat::IntVar;
 using LinearExpr = operations_research::sat::LinearExpr;
 using SatParameters = operations_research::sat::SatParameters;
 using operations_research::sat::SolutionBooleanValue;
+using operations_research::Domain;
 using operations_research::sat::SolveWithParameters;
 
 int OtherEndpoint(const Edge &edge, int vertex) {
@@ -39,6 +41,14 @@ int OtherEndpoint(const Edge &edge, int vertex) {
         return edge.head;
     }
     throw std::invalid_argument("Vertex is not incident to the edge");
+}
+
+int ArcSource(const Edge &edge, bool forward) {
+    return forward ? edge.head : edge.tail;
+}
+
+int ArcTarget(const Edge &edge, bool forward) {
+    return forward ? edge.tail : edge.head;
 }
 
 void RemoveIncidentEdge(std::vector<int> *incident_edges, int edge_index) {
@@ -315,6 +325,170 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
 
         return edge_partition;
     }
+}
+
+std::optional<std::vector<RootedSpanningTree> > Graph::EdgeIndependentTrees(
+    int k, int r) const {
+    if (k < 0) {
+        throw std::invalid_argument("Number of trees must be non-negative");
+    }
+    if (r < 0 || r >= NumVertices()) {
+        throw std::out_of_range("Root vertex is outside the graph");
+    }
+    if (k == 0) {
+        return std::vector<RootedSpanningTree>();
+    }
+    if (NumVertices() == 1) {
+        return std::vector<RootedSpanningTree>(k, RootedSpanningTree(1, -1));
+    }
+
+    CpModelBuilder model;
+    std::vector<std::vector<BoolVar> > tree_forward(k);
+    std::vector<std::vector<BoolVar> > tree_backward(k);
+    std::vector<std::vector<IntVar> > depth(k);
+    for (int tree = 0; tree < k; ++tree) {
+        tree_forward[tree].reserve(NumEdges());
+        tree_backward[tree].reserve(NumEdges());
+        for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+            tree_forward[tree].push_back(model.NewBoolVar());
+            tree_backward[tree].push_back(model.NewBoolVar());
+        }
+
+        depth[tree].reserve(NumVertices());
+        for (int vertex = 0; vertex < NumVertices(); ++vertex) {
+            depth[tree].push_back(model.NewIntVar(Domain(0, NumVertices() - 1)));
+        }
+        model.AddEquality(depth[tree][r], 0);
+
+        for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+            model.AddLessOrEqual(
+                tree_forward[tree][edge_index] + tree_backward[tree][edge_index], 1);
+
+            const Edge &edge = edges[edge_index];
+            model.AddGreaterOrEqual(
+                depth[tree][edge.tail], depth[tree][edge.head] + 1)
+                .OnlyEnforceIf(tree_forward[tree][edge_index]);
+            model.AddGreaterOrEqual(
+                depth[tree][edge.head], depth[tree][edge.tail] + 1)
+                .OnlyEnforceIf(tree_backward[tree][edge_index]);
+        }
+
+        for (int vertex = 0; vertex < NumVertices(); ++vertex) {
+            std::vector<BoolVar> incoming_arcs;
+            incoming_arcs.reserve(adj_list[vertex].size());
+            for (const int edge_index : adj_list[vertex]) {
+                const Edge &edge = edges[edge_index];
+                if (edge.tail == vertex) {
+                    incoming_arcs.push_back(tree_forward[tree][edge_index]);
+                }
+                if (edge.head == vertex) {
+                    incoming_arcs.push_back(tree_backward[tree][edge_index]);
+                }
+            }
+
+            if (vertex == r) {
+                model.AddEquality(LinearExpr::Sum(incoming_arcs), 0);
+                continue;
+            }
+            model.AddEquality(LinearExpr::Sum(incoming_arcs), 1);
+        }
+    }
+
+    std::vector<std::vector<std::vector<BoolVar> > > path_forward(
+        k, std::vector<std::vector<BoolVar> >(NumVertices()));
+    std::vector<std::vector<std::vector<BoolVar> > > path_backward(
+        k, std::vector<std::vector<BoolVar> >(NumVertices()));
+    for (int tree = 0; tree < k; ++tree) {
+        for (int target = 0; target < NumVertices(); ++target) {
+            if (target == r) {
+                continue;
+            }
+
+            path_forward[tree][target].reserve(NumEdges());
+            path_backward[tree][target].reserve(NumEdges());
+            for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+                path_forward[tree][target].push_back(model.NewBoolVar());
+                path_backward[tree][target].push_back(model.NewBoolVar());
+                model.AddLessOrEqual(
+                    path_forward[tree][target][edge_index],
+                    tree_forward[tree][edge_index]);
+                model.AddLessOrEqual(
+                    path_backward[tree][target][edge_index],
+                    tree_backward[tree][edge_index]);
+            }
+
+            for (int vertex = 0; vertex < NumVertices(); ++vertex) {
+                std::vector<BoolVar> outgoing_path_arcs;
+                std::vector<BoolVar> incoming_path_arcs;
+                outgoing_path_arcs.reserve(adj_list[vertex].size());
+                incoming_path_arcs.reserve(adj_list[vertex].size());
+                for (const int edge_index : adj_list[vertex]) {
+                    const Edge &edge = edges[edge_index];
+                    if (ArcSource(edge, true) == vertex) {
+                        outgoing_path_arcs.push_back(path_forward[tree][target][edge_index]);
+                    }
+                    if (ArcTarget(edge, true) == vertex) {
+                        incoming_path_arcs.push_back(path_forward[tree][target][edge_index]);
+                    }
+                    if (ArcSource(edge, false) == vertex) {
+                        outgoing_path_arcs.push_back(path_backward[tree][target][edge_index]);
+                    }
+                    if (ArcTarget(edge, false) == vertex) {
+                        incoming_path_arcs.push_back(path_backward[tree][target][edge_index]);
+                    }
+                }
+
+                const LinearExpr balance =
+                    LinearExpr::Sum(outgoing_path_arcs) -
+                    LinearExpr::Sum(incoming_path_arcs);
+                if (vertex == r) {
+                    model.AddEquality(balance, 1);
+                } else if (vertex == target) {
+                    model.AddEquality(balance, -1);
+                } else {
+                    model.AddEquality(balance, 0);
+                }
+            }
+        }
+    }
+
+    for (int target = 0; target < NumVertices(); ++target) {
+        if (target == r) {
+            continue;
+        }
+        for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+            std::vector<BoolVar> path_uses;
+            path_uses.reserve(2 * k);
+            for (int tree = 0; tree < k; ++tree) {
+                path_uses.push_back(path_forward[tree][target][edge_index]);
+                path_uses.push_back(path_backward[tree][target][edge_index]);
+            }
+            model.AddLessOrEqual(LinearExpr::Sum(path_uses), 1);
+        }
+    }
+
+    SatParameters parameters;
+    parameters.set_num_search_workers(1);
+    const CpSolverResponse response =
+        SolveWithParameters(model.Build(), parameters);
+    if (response.status() != CpSolverStatus::FEASIBLE &&
+        response.status() != CpSolverStatus::OPTIMAL) {
+        return std::nullopt;
+    }
+
+    std::vector<RootedSpanningTree> rooted_trees(
+        k, RootedSpanningTree(NumVertices(), -1));
+    for (int tree = 0; tree < k; ++tree) {
+        for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+            if (SolutionBooleanValue(response, tree_forward[tree][edge_index])) {
+                rooted_trees[tree][edges[edge_index].tail] = edge_index;
+            }
+            if (SolutionBooleanValue(response, tree_backward[tree][edge_index])) {
+                rooted_trees[tree][edges[edge_index].head] = edge_index;
+            }
+        }
+    }
+    return rooted_trees;
 }
 
 int Graph::NumEdges() const {

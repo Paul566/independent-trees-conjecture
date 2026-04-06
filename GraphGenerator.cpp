@@ -258,6 +258,9 @@ std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
 
     for (int step = 0; step < n - 2; ++step) {
         std::vector<int> cut_edges = SampleKargerCutEdges(&rng_, *graph);
+        while (cut_edges.size() > connectivity) {
+            cut_edges = SampleKargerCutEdges(&rng_, *graph);
+        }
         if (static_cast<int>(cut_edges.size()) < pinch_size) {
             throw std::logic_error(
                 "Karger-style contraction produced a cut that is too small");

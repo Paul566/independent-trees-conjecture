@@ -18,6 +18,8 @@ struct Edge {
     bool operator==(const Edge &) const = default;
 };
 
+using RootedSpanningTree = std::vector<int>;
+
 class Graph {
     public:
         Graph();
@@ -28,6 +30,8 @@ class Graph {
         [[nodiscard]] int Connectivity() const;
         [[nodiscard]] std::optional<std::vector<bool> > DecomposeConnectivity(
             int connectivity_first, int connectivity_second) const;
+        [[nodiscard]] std::optional<std::vector<RootedSpanningTree> > EdgeIndependentTrees(
+            int k, int r) const;
         [[nodiscard]] int NumEdges() const;
         [[nodiscard]] int NumVertices() const;
         void AddEdge(int u, int v);
