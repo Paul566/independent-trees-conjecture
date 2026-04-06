@@ -15,7 +15,8 @@ class GraphGenerator {
         explicit GraphGenerator(std::mt19937::result_type seed);
 
         std::unique_ptr<Graph> GenerateRandomGraph(int n, int m);
-        std::unique_ptr<Graph> RandomPinchingGraph(int n, int connectivity);
+        std::unique_ptr<Graph> RandomPinchingEvenGraph(int n, int connectivity);
+        std::unique_ptr<Graph> KargerPinchingEvenGraph(int n, int connectivity);
         std::unique_ptr<Graph> RandomPinchingOddGraph(int n, int connectivity);
         std::unique_ptr<Graph> AdversarialPinchingEvenGraph(
             int n_max, int a, int b, bool pinch_from_first_factor);

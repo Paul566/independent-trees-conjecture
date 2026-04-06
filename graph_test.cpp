@@ -335,7 +335,7 @@ void TestRandomPinchingGraphRejectsInvalidArguments() {
 
     bool threw = false;
     try {
-        generator.RandomPinchingGraph(1, 4);
+        generator.RandomPinchingEvenGraph(1, 4);
     } catch (const std::invalid_argument &) {
         threw = true;
     }
@@ -343,7 +343,27 @@ void TestRandomPinchingGraphRejectsInvalidArguments() {
 
     threw = false;
     try {
-        generator.RandomPinchingGraph(5, 3);
+        generator.RandomPinchingEvenGraph(5, 3);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestKargerPinchingEvenGraphRejectsInvalidArguments() {
+    GraphGenerator generator(23);
+
+    bool threw = false;
+    try {
+        generator.KargerPinchingEvenGraph(1, 4);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.KargerPinchingEvenGraph(5, 3);
     } catch (const std::invalid_argument &) {
         threw = true;
     }
@@ -359,11 +379,32 @@ void TestRandomPinchingGraphOnManySeeds() {
     for (std::uint32_t seed = 0; seed < 100; ++seed) {
         GraphGenerator generator(seed);
         const std::unique_ptr<Graph> graph =
-            generator.RandomPinchingGraph(kNumVertices, kConnectivity);
+            generator.RandomPinchingEvenGraph(kNumVertices, kConnectivity);
 
         assert(graph->NumVertices() == kNumVertices);
         assert(graph->NumEdges() == kExpectedEdges);
         assert(!HasSelfLoop(*graph));
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
+void TestKargerPinchingEvenGraphOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.KargerPinchingEvenGraph(kNumVertices, kConnectivity);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
         assert(graph->Connectivity() == kConnectivity);
     }
 }
@@ -528,6 +569,8 @@ int main() {
     TestConnectivityMatchesBruteForceOnRandomGraphs();
     TestRandomPinchingGraphRejectsInvalidArguments();
     TestRandomPinchingGraphOnManySeeds();
+    TestKargerPinchingEvenGraphRejectsInvalidArguments();
+    TestKargerPinchingEvenGraphOnManySeeds();
     TestRandomPinchingOddGraphRejectsInvalidArguments();
     TestRandomPinchingOddGraphOnManySeeds();
     TestAdversarialPinchingEvenGraphRejectsInvalidArguments();

@@ -16,6 +16,39 @@
 
 namespace {
 
+struct DisjointSet {
+    explicit DisjointSet(int size) : parent(size), rank(size, 0) {
+        std::iota(parent.begin(), parent.end(), 0);
+    }
+
+    int Find(int vertex) {
+        if (parent[vertex] == vertex) {
+            return vertex;
+        }
+        parent[vertex] = Find(parent[vertex]);
+        return parent[vertex];
+    }
+
+    bool Unite(int first, int second) {
+        first = Find(first);
+        second = Find(second);
+        if (first == second) {
+            return false;
+        }
+        if (rank[first] < rank[second]) {
+            std::swap(first, second);
+        }
+        parent[second] = first;
+        if (rank[first] == rank[second]) {
+            ++rank[first];
+        }
+        return true;
+    }
+
+    std::vector<int> parent;
+    std::vector<int> rank;
+};
+
 std::vector<int> SampleDistinctIndices(
     std::mt19937 *rng, int total_size, int sample_size) {
     std::vector<int> indices(total_size);
@@ -67,6 +100,40 @@ std::vector<int> SampleDistinctIndicesWithRequiredElement(
         sampled_indices.end(), remaining_candidates.begin(),
         remaining_candidates.end());
     return sampled_indices;
+}
+
+std::vector<int> SampleKargerCutEdges(std::mt19937 *rng, const Graph &graph) {
+    if (graph.NumVertices() <= 2) {
+        std::vector<int> all_edges(graph.NumEdges());
+        std::iota(all_edges.begin(), all_edges.end(), 0);
+        return all_edges;
+    }
+
+    std::vector<int> edge_indices(graph.NumEdges());
+    std::iota(edge_indices.begin(), edge_indices.end(), 0);
+    std::shuffle(edge_indices.begin(), edge_indices.end(), *rng);
+
+    DisjointSet components(graph.NumVertices());
+    int remaining_components = graph.NumVertices();
+    for (const int edge_index : edge_indices) {
+        const Edge &edge = graph.edges[edge_index];
+        if (components.Unite(edge.head, edge.tail)) {
+            --remaining_components;
+            if (remaining_components == 2) {
+                break;
+            }
+        }
+    }
+
+    std::vector<int> cut_edges;
+    cut_edges.reserve(graph.NumEdges());
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        const Edge &edge = graph.edges[edge_index];
+        if (components.Find(edge.head) != components.Find(edge.tail)) {
+            cut_edges.push_back(edge_index);
+        }
+    }
+    return cut_edges;
 }
 
 }  // namespace
@@ -144,7 +211,7 @@ std::unique_ptr<Graph> GraphGenerator::RandomPinchingOddGraph(
     return graph;
 }
 
-std::unique_ptr<Graph> GraphGenerator::RandomPinchingGraph(
+std::unique_ptr<Graph> GraphGenerator::RandomPinchingEvenGraph(
     int n, int connectivity) {
     if (n < 2) {
         throw std::invalid_argument(
@@ -167,6 +234,37 @@ std::unique_ptr<Graph> GraphGenerator::RandomPinchingGraph(
         std::shuffle(edge_indices.begin(), edge_indices.end(), rng_);
         edge_indices.resize(pinch_size);
         graph->Pinch(edge_indices);
+    }
+
+    return graph;
+}
+
+std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
+    int n, int connectivity) {
+    if (n < 2) {
+        throw std::invalid_argument(
+            "Karger pinching construction requires at least 2 vertices");
+    }
+    if (connectivity <= 0 || connectivity % 2 != 0) {
+        throw std::invalid_argument(
+            "Connectivity must be a positive even integer");
+    }
+
+    const int pinch_size = connectivity / 2;
+    auto graph = std::make_unique<Graph>(2);
+    for (int i = 0; i < connectivity; ++i) {
+        graph->AddEdge(0, 1);
+    }
+
+    for (int step = 0; step < n - 2; ++step) {
+        std::vector<int> cut_edges = SampleKargerCutEdges(&rng_, *graph);
+        if (static_cast<int>(cut_edges.size()) < pinch_size) {
+            throw std::logic_error(
+                "Karger-style contraction produced a cut that is too small");
+        }
+        std::shuffle(cut_edges.begin(), cut_edges.end(), rng_);
+        cut_edges.resize(pinch_size);
+        graph->Pinch(cut_edges);
     }
 
     return graph;
