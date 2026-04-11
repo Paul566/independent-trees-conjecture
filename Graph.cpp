@@ -42,6 +42,15 @@ void ConfigureDecomposeParameters(SatParameters *parameters) {
     parameters->set_use_sat_inprocessing(false);
 }
 
+void ConfigureEdgeIndependentTreesParameters(SatParameters *parameters) {
+    parameters->set_num_search_workers(1);
+    parameters->set_cp_model_presolve(false);
+    parameters->set_cp_model_probing_level(0);
+    parameters->set_linearization_level(0);
+    parameters->set_symmetry_level(0);
+    parameters->set_use_sat_inprocessing(false);
+}
+
 int OtherEndpoint(const Edge &edge, int vertex) {
     if (edge.head == vertex) {
         return edge.tail;
@@ -483,7 +492,7 @@ std::optional<std::vector<RootedSpanningTree> > Graph::EdgeIndependentTrees(
     }
 
     SatParameters parameters;
-    parameters.set_num_search_workers(1);
+    ConfigureEdgeIndependentTreesParameters(&parameters);
     const CpSolverResponse response =
         SolveWithParameters(model.Build(), parameters);
     if (response.status() != CpSolverStatus::FEASIBLE &&
