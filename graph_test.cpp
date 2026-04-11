@@ -11,6 +11,7 @@
 #include <optional>
 #include <queue>
 #include <random>
+#include <iostream>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -594,6 +595,14 @@ void TestKargerPinchingEvenGraphRejectsInvalidArguments() {
         threw = true;
     }
     assert(threw);
+
+    threw = false;
+    try {
+        generator.KargerPinchingEvenGraph(6, 4, false, true, true, 2, 0);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
 }
 
 void TestRandomPinchingGraphOnManySeeds() {
@@ -624,6 +633,93 @@ void TestKargerPinchingEvenGraphOnManySeeds() {
         GraphGenerator generator(seed);
         const std::unique_ptr<Graph> graph =
             generator.KargerPinchingEvenGraph(kNumVertices, kConnectivity);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
+void TestKargerPinchingEvenGraphWithoutNonParallelPreferenceOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.KargerPinchingEvenGraph(
+                kNumVertices, kConnectivity, false, false);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
+void TestKargerPinchingEvenGraphVerboseModePreservesGeneration() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr std::uint32_t kSeed = 17;
+
+    GraphGenerator quiet_generator(kSeed);
+    const std::unique_ptr<Graph> quiet_graph =
+        quiet_generator.KargerPinchingEvenGraph(kNumVertices, kConnectivity);
+
+    GraphGenerator verbose_generator(kSeed);
+    std::ostringstream output_buffer;
+    std::streambuf *const original_buffer = std::cout.rdbuf(output_buffer.rdbuf());
+    const std::unique_ptr<Graph> verbose_graph =
+        verbose_generator.KargerPinchingEvenGraph(
+            kNumVertices, kConnectivity, true);
+    std::cout.rdbuf(original_buffer);
+
+    assert(verbose_graph->edges == quiet_graph->edges);
+    assert(verbose_graph->adj_list == quiet_graph->adj_list);
+    const std::string output = output_buffer.str();
+    assert(output.find("average_cut_size=") != std::string::npos);
+    assert(output.find("single_vertex_cut_probability=") != std::string::npos);
+    assert(output.find("parallel_edge_fraction=") != std::string::npos);
+}
+
+void TestKargerPinchingEvenGraphDefaultPrefersNonParallelEdges() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr std::uint32_t kSeed = 17;
+
+    GraphGenerator default_generator(kSeed);
+    const std::unique_ptr<Graph> default_graph =
+        default_generator.KargerPinchingEvenGraph(kNumVertices, kConnectivity);
+
+    GraphGenerator explicit_generator(kSeed);
+    const std::unique_ptr<Graph> explicit_graph =
+        explicit_generator.KargerPinchingEvenGraph(
+            kNumVertices, kConnectivity, false, true);
+
+    assert(default_graph->edges == explicit_graph->edges);
+    assert(default_graph->adj_list == explicit_graph->adj_list);
+}
+
+void TestKargerPinchingEvenGraphWithoutNonSingleVertexPreferenceOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.KargerPinchingEvenGraph(
+                kNumVertices, kConnectivity, false, true, false);
 
         assert(graph->NumVertices() == kNumVertices);
         assert(graph->NumEdges() == kExpectedEdges);
@@ -834,6 +930,10 @@ int main() {
     TestRandomPinchingGraphOnManySeeds();
     TestKargerPinchingEvenGraphRejectsInvalidArguments();
     TestKargerPinchingEvenGraphOnManySeeds();
+    TestKargerPinchingEvenGraphWithoutNonParallelPreferenceOnManySeeds();
+    TestKargerPinchingEvenGraphWithoutNonSingleVertexPreferenceOnManySeeds();
+    TestKargerPinchingEvenGraphVerboseModePreservesGeneration();
+    TestKargerPinchingEvenGraphDefaultPrefersNonParallelEdges();
     TestRandomPinchingOddGraphRejectsInvalidArguments();
     TestRandomPinchingOddGraphOnManySeeds();
     TestAdversarialPinchingEvenGraphRejectsInvalidArguments();

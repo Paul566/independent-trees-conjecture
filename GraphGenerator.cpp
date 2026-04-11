@@ -8,13 +8,22 @@
 
 #include <algorithm>
 #include <functional>
+#include <iostream>
+#include <map>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
 
 namespace {
+
+struct KargerCutSample {
+    std::vector<int> cut_edges;
+    bool is_single_vertex_cut = false;
+};
 
 struct DisjointSet {
     explicit DisjointSet(int size) : parent(size), rank(size, 0) {
@@ -102,11 +111,11 @@ std::vector<int> SampleDistinctIndicesWithRequiredElement(
     return sampled_indices;
 }
 
-std::vector<int> SampleKargerCutEdges(std::mt19937 *rng, const Graph &graph) {
+KargerCutSample SampleKargerCut(std::mt19937 *rng, const Graph &graph) {
     if (graph.NumVertices() <= 2) {
         std::vector<int> all_edges(graph.NumEdges());
         std::iota(all_edges.begin(), all_edges.end(), 0);
-        return all_edges;
+        return {.cut_edges = std::move(all_edges), .is_single_vertex_cut = true};
     }
 
     std::vector<int> edge_indices(graph.NumEdges());
@@ -125,6 +134,11 @@ std::vector<int> SampleKargerCutEdges(std::mt19937 *rng, const Graph &graph) {
         }
     }
 
+    std::vector<int> component_sizes(graph.NumVertices(), 0);
+    for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
+        ++component_sizes[components.Find(vertex)];
+    }
+
     std::vector<int> cut_edges;
     cut_edges.reserve(graph.NumEdges());
     for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
@@ -133,7 +147,80 @@ std::vector<int> SampleKargerCutEdges(std::mt19937 *rng, const Graph &graph) {
             cut_edges.push_back(edge_index);
         }
     }
-    return cut_edges;
+
+    bool is_single_vertex_cut = false;
+    for (const int component_size : component_sizes) {
+        if (component_size == 1) {
+            is_single_vertex_cut = true;
+            break;
+        }
+    }
+    return {
+        .cut_edges = std::move(cut_edges),
+        .is_single_vertex_cut = is_single_vertex_cut,
+    };
+}
+
+double FractionOfParallelEdges(const Graph &graph) {
+    if (graph.NumEdges() == 0) {
+        return 0.0;
+    }
+
+    std::map<std::pair<int, int>, int> multiplicities;
+    for (const Edge &edge : graph.edges) {
+        ++multiplicities[{std::min(edge.head, edge.tail),
+                          std::max(edge.head, edge.tail)}];
+    }
+
+    int parallel_edges = 0;
+    for (const auto &[endpoints, multiplicity] : multiplicities) {
+        static_cast<void>(endpoints);
+        if (multiplicity > 1) {
+            parallel_edges += multiplicity;
+        }
+    }
+    return static_cast<double>(parallel_edges) / graph.NumEdges();
+}
+
+std::vector<int> SelectPinchEdgesFromCut(
+    std::mt19937 *rng, const Graph &graph, std::vector<int> cut_edges,
+    int pinch_size, bool prefer_non_parallel) {
+    std::shuffle(cut_edges.begin(), cut_edges.end(), *rng);
+    if (!prefer_non_parallel) {
+        cut_edges.resize(pinch_size);
+        return cut_edges;
+    }
+
+    std::vector<int> selected_edges;
+    selected_edges.reserve(pinch_size);
+    std::set<std::pair<int, int>> used_endpoint_pairs;
+    std::vector<bool> is_selected(cut_edges.size(), false);
+    for (int i = 0; i < static_cast<int>(cut_edges.size()); ++i) {
+        const Edge &edge = graph.edges[cut_edges[i]];
+        const std::pair<int, int> endpoints = {
+            std::min(edge.head, edge.tail), std::max(edge.head, edge.tail)};
+        if (used_endpoint_pairs.contains(endpoints)) {
+            continue;
+        }
+        used_endpoint_pairs.insert(endpoints);
+        selected_edges.push_back(cut_edges[i]);
+        is_selected[i] = true;
+        if (static_cast<int>(selected_edges.size()) == pinch_size) {
+            return selected_edges;
+        }
+    }
+
+    for (int i = 0; i < static_cast<int>(cut_edges.size()); ++i) {
+        if (is_selected[i]) {
+            continue;
+        }
+        selected_edges.push_back(cut_edges[i]);
+        if (static_cast<int>(selected_edges.size()) == pinch_size) {
+            return selected_edges;
+        }
+    }
+
+    throw std::logic_error("Not enough cut edges available for pinching");
 }
 
 }  // namespace
@@ -240,7 +327,9 @@ std::unique_ptr<Graph> GraphGenerator::RandomPinchingEvenGraph(
 }
 
 std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
-    int n, int connectivity) {
+    int n, int connectivity, bool verbose, bool prefer_non_parallel,
+    bool prefer_non_single_vertex_cut, int connectivity_luft,
+    int max_cut_sampling_attempts) {
     if (n < 2) {
         throw std::invalid_argument(
             "Karger pinching construction requires at least 2 vertices");
@@ -249,6 +338,10 @@ std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
         throw std::invalid_argument(
             "Connectivity must be a positive even integer");
     }
+    if (max_cut_sampling_attempts <= 0) {
+        throw std::invalid_argument(
+            "Maximum cut sampling attempts must be positive");
+    }
 
     const int pinch_size = connectivity / 2;
     auto graph = std::make_unique<Graph>(2);
@@ -256,18 +349,60 @@ std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
         graph->AddEdge(0, 1);
     }
 
+    int total_cut_size = 0;
+    int single_vertex_cut_count = 0;
     for (int step = 0; step < n - 2; ++step) {
-        std::vector<int> cut_edges = SampleKargerCutEdges(&rng_, *graph);
-        while (cut_edges.size() > connectivity) {
-            cut_edges = SampleKargerCutEdges(&rng_, *graph);
+        std::optional<KargerCutSample> selected_cut;
+        for (int attempt = 0; attempt < max_cut_sampling_attempts; ++attempt) {
+            KargerCutSample candidate_cut = SampleKargerCut(&rng_, *graph);
+            if (candidate_cut.cut_edges.size() > connectivity + connectivity_luft) {
+                continue;
+            }
+            if (!selected_cut.has_value()) {
+                selected_cut = std::move(candidate_cut);
+                if (!prefer_non_single_vertex_cut ||
+                    !selected_cut->is_single_vertex_cut) {
+                    break;
+                }
+                continue;
+            }
+            if (prefer_non_single_vertex_cut &&
+                !candidate_cut.is_single_vertex_cut) {
+                selected_cut = std::move(candidate_cut);
+                break;
+            }
+        }
+        if (!selected_cut.has_value()) {
+            throw std::logic_error(
+                "Karger-style contraction failed to find an acceptable cut");
+        }
+        std::vector<int> cut_edges = selected_cut->cut_edges;
+        total_cut_size += static_cast<int>(cut_edges.size());
+        if (selected_cut->is_single_vertex_cut) {
+            ++single_vertex_cut_count;
         }
         if (static_cast<int>(cut_edges.size()) < pinch_size) {
             throw std::logic_error(
                 "Karger-style contraction produced a cut that is too small");
         }
-        std::shuffle(cut_edges.begin(), cut_edges.end(), rng_);
-        cut_edges.resize(pinch_size);
-        graph->Pinch(cut_edges);
+        graph->Pinch(SelectPinchEdgesFromCut(
+            &rng_, *graph, std::move(cut_edges), pinch_size,
+            prefer_non_parallel));
+    }
+
+    if (verbose) {
+        const int num_pinches = n - 2;
+        const double average_cut_size =
+            num_pinches == 0 ? 0.0
+                             : static_cast<double>(total_cut_size) / num_pinches;
+        const double single_vertex_cut_probability =
+            num_pinches == 0 ? 0.0
+                             : static_cast<double>(single_vertex_cut_count) / num_pinches;
+        std::cout << "average_cut_size=" << average_cut_size
+                  << " single_vertex_cut_probability="
+                  << single_vertex_cut_probability
+                  << " parallel_edge_fraction="
+                  << FractionOfParallelEdges(*graph) << std::endl;
     }
 
     return graph;

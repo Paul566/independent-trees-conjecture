@@ -8,7 +8,12 @@
 #include <optional>
 #include <random>
 
-void FindEvenNonDecomposable(int conn, int num_iter, int min_n, int max_n, int seed=239) {
+void FindEvenNonDecomposable(int conn,
+                             int num_iter,
+                             int min_n,
+                             int max_n,
+                             int seed = 239,
+                             int print_every_num_iter = 100, bool verbose=false) {
     const std::filesystem::path output_directory = "../graphs/" + std::to_string(conn) + "_non_decomposable";
     std::filesystem::create_directories(output_directory);
 
@@ -18,14 +23,14 @@ void FindEvenNonDecomposable(int conn, int num_iter, int min_n, int max_n, int s
 
     int exported_graphs = 0;
     for (int attempt = 0; attempt < num_iter; ++attempt) {
-        if (attempt % 100 == 0) {
+        if (attempt % print_every_num_iter == 0) {
             std::cout << "attempt=" << attempt
                 << " exported=" << exported_graphs << std::endl;
         }
 
         const int num_vertices = vertex_distribution(rng);
         std::unique_ptr<Graph> graph =
-            generator.KargerPinchingEvenGraph(num_vertices, conn);
+            generator.KargerPinchingEvenGraph(num_vertices, conn, verbose);
 
         bool decomposable = false;
         for (int factor_conn = 2; factor_conn <= conn / 2; ++factor_conn) {
@@ -45,10 +50,9 @@ void FindEvenNonDecomposable(int conn, int num_iter, int min_n, int max_n, int s
     std::cout << "exported_total=" << exported_graphs << std::endl;
 }
 
-void Export6Trees() {
-    constexpr int kNumTrees = 6;
+void ExportTrees(int connectivity) {
     constexpr int kRoot = 0;
-    const std::filesystem::path input_directory = "graphs/6_non_decomposable";
+    const std::filesystem::path input_directory = "../graphs/" + std::to_string(connectivity) + "_non_decomposable";
 
     for (const std::filesystem::directory_entry &entry :
          std::filesystem::directory_iterator(input_directory)) {
@@ -59,58 +63,42 @@ void Export6Trees() {
             continue;
         }
 
+        std::cout << entry.path().filename().string() << std::flush;
         Graph graph(entry.path());
+
         const std::optional<std::vector<RootedSpanningTree> > trees =
-            graph.EdgeIndependentTrees(kNumTrees, kRoot);
+            graph.EdgeIndependentTrees(connectivity, kRoot);
 
-        std::cout << entry.path().filename().string()
-            << " trees_found=" << trees.has_value() << std::endl;
         if (!trees.has_value()) {
-            continue;
-        }
-
-        std::ofstream output(entry.path().parent_path() /
-            (entry.path().stem().string() + "_trees.txt"));
-        output << trees->size() << " " << kRoot << "\n";
-        for (const RootedSpanningTree &tree : *trees) {
-            for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
-                if (vertex > 0) {
-                    output << " ";
+            std::cout << " counterexample" << std::endl;
+        } else {
+            std::cout << std::endl;
+            std::ofstream output(entry.path().parent_path() /
+                (entry.path().stem().string() + "_trees.txt"));
+            output << trees->size() << " " << kRoot << "\n";
+            for (const RootedSpanningTree &tree : *trees) {
+                for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
+                    if (vertex > 0) {
+                        output << " ";
+                    }
+                    output << tree[vertex];
                 }
-                output << tree[vertex];
+                output << "\n";
             }
-            output << "\n";
         }
     }
 }
 
 int main() {
-    // constexpr int kNumTrees = 6;
-    // constexpr int kRoot = 0;
-    // const std::filesystem::path input_directory = "../graphs/6_non_decomposable";
-    //
-    // for (const std::filesystem::directory_entry &entry :
-    //      std::filesystem::directory_iterator(input_directory)) {
-    //     if (!entry.is_regular_file() || entry.path().extension() != ".txt") {
-    //         continue;
-    //     }
-    //     if (entry.path().stem().string().ends_with("_metadata") || entry.path().stem().string().ends_with("_trees")) {
-    //         continue;
-    //     }
-    //
-    //     std::cout << entry.path().filename().string();
-    //     Graph graph(entry.path());
-    //
-    //     const std::optional<std::vector<RootedSpanningTree> > trees =
-    //         graph.EdgeIndependentTrees(kNumTrees, kRoot);
-    //
-    //     if (!trees.has_value()) {
-    //         std::cout << " counterexample";
-    //     }
-    //     std::cout << std::endl;
-    // }
+    // ExportTrees(8);
 
-    FindEvenNonDecomposable(8, 10000, 6, 24);
+    FindEvenNonDecomposable(8, 1000'000, 15, 40, 1, 1000, false);
+
+    // Graph graph("../graphs/8_non_decomposable/graph_17940.txt");
+    // const std::optional<std::vector<RootedSpanningTree> > trees =
+    //     graph.EdgeIndependentTrees(8, 0);
+    //
+    // std::cout << " trees_found=" << trees.has_value() << std::endl;
 
     return 0;
 }
