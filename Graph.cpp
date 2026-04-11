@@ -283,6 +283,7 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
     while (true) {
         SatParameters parameters;
         parameters.set_num_search_workers(1);
+        parameters.set_linearization_level(0);
         const CpSolverResponse response =
             SolveWithParameters(model.Build(), parameters);
         if (response.status() != CpSolverStatus::FEASIBLE &&
@@ -296,6 +297,8 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
                 SolutionBooleanValue(response, edge_in_second[edge_index]);
         }
 
+        bool added_constraint = false;
+
         const std::optional<std::vector<int> > first_cut = FindViolatingCut(
             *this, edge_partition, false, connectivity_first);
         if (first_cut.has_value()) {
@@ -307,7 +310,7 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
             model.AddLessOrEqual(
                 LinearExpr::Sum(cut_variables),
                 static_cast<int64_t>(first_cut->size()) - connectivity_first);
-            continue;
+            added_constraint = true;
         }
 
         const std::optional<std::vector<int> > second_cut = FindViolatingCut(
@@ -320,6 +323,10 @@ std::optional<std::vector<bool> > Graph::DecomposeConnectivity(
             }
             model.AddGreaterOrEqual(
                 LinearExpr::Sum(cut_variables), connectivity_second);
+            added_constraint = true;
+        }
+
+        if (added_constraint) {
             continue;
         }
 
