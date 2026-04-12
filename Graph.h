@@ -32,6 +32,7 @@ class Graph {
             int connectivity_first, int connectivity_second) const;
         [[nodiscard]] std::optional<std::vector<RootedSpanningTree> > EdgeIndependentTrees(
             int k, int r) const;
+        [[nodiscard]] std::optional<std::vector<int> > NowhereZeroKFlow(int k) const;
         [[nodiscard]] int NumEdges() const;
         [[nodiscard]] int NumVertices() const;
         void AddEdge(int u, int v);

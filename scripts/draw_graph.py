@@ -10,6 +10,16 @@ from matplotlib.patches import FancyArrowPatch
 import networkx as nx
 
 
+def list_graph_files(directory: Path) -> list[Path]:
+    return sorted(
+        graph_path
+        for graph_path in directory.glob("graph_*.txt")
+        if not graph_path.name.endswith("_metadata.txt")
+        and not graph_path.name.endswith("_decomposition.txt")
+        and not graph_path.name.endswith("_trees.txt")
+    )
+
+
 def read_graph(path: Path) -> tuple[nx.MultiGraph, list[tuple[int, int]]]:
     with path.open("r", encoding="utf-8") as input_file:
         lines = [line.strip() for line in input_file if line.strip()]
@@ -239,12 +249,43 @@ def draw_trees(
     plt.close(figure)
 
 
+def draw_graph_file(
+    input_path: Path,
+    output_path: Path,
+    decomposition_path: Path | None = None,
+    trees_path: Path | None = None,
+) -> None:
+    graph, ordered_edges = read_graph(input_path)
+    if trees_path is not None:
+        root, trees = read_trees(trees_path)
+        draw_trees(graph, ordered_edges, output_path, root, trees)
+        return
+
+    decomposition = None
+    if decomposition_path is not None:
+        decomposition = read_decomposition(decomposition_path, len(ordered_edges))
+    draw_graph(graph, ordered_edges, output_path, decomposition)
+
+
+def draw_graph_directory(directory: Path) -> None:
+    for graph_path in list_graph_files(directory):
+        stem = graph_path.stem
+        decomposition_path = graph_path.with_name(f"{stem}_decomposition.txt")
+        trees_path = graph_path.with_name(f"{stem}_trees.txt")
+        draw_graph_file(
+            graph_path,
+            graph_path.with_suffix(".png"),
+            decomposition_path if decomposition_path.exists() else None,
+            trees_path if trees_path.exists() else None,
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Read an exported graph and draw it to an image."
+        description="Read an exported graph or a directory of graphs and draw image files."
     )
-    parser.add_argument("input", type=Path, help="Path to the exported graph file")
-    parser.add_argument("output", type=Path, help="Path to the output image")
+    parser.add_argument("input", type=Path, help="Path to the exported graph file or directory")
+    parser.add_argument("output", type=Path, nargs="?", help="Path to the output image")
     parser.add_argument(
         "--decomposition",
         type=Path,
@@ -257,16 +298,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    graph, ordered_edges = read_graph(args.input)
-    if args.trees is not None:
-        root, trees = read_trees(args.trees)
-        draw_trees(graph, ordered_edges, args.output, root, trees)
+    if args.input.is_dir():
+        if args.output is not None:
+            raise ValueError("Output path is not supported when drawing a directory")
+        if args.decomposition is not None or args.trees is not None:
+            raise ValueError("Sidecar overrides are not supported when drawing a directory")
+        draw_graph_directory(args.input)
         return
 
-    decomposition = None
-    if args.decomposition is not None:
-        decomposition = read_decomposition(args.decomposition, len(ordered_edges))
-    draw_graph(graph, ordered_edges, args.output, decomposition)
+    if args.output is None:
+        raise ValueError("Output path is required when drawing a single graph file")
+    draw_graph_file(args.input, args.output, args.decomposition, args.trees)
 
 
 if __name__ == "__main__":

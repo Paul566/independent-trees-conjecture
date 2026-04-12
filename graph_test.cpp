@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -130,6 +131,36 @@ bool AreValidEdgeIndependentTrees(
             }
         }
     }
+    return true;
+}
+
+bool IsValidNowhereZeroKFlow(
+    const Graph &graph, const std::vector<int> &flow, int k) {
+    if (k <= 1 || static_cast<int>(flow.size()) != graph.NumEdges()) {
+        return false;
+    }
+
+    for (int edge_index = 0; edge_index < graph.NumEdges(); ++edge_index) {
+        const int value = flow[edge_index];
+        if (value == 0 || std::abs(value) >= k) {
+            return false;
+        }
+    }
+
+    for (int vertex = 0; vertex < graph.NumVertices(); ++vertex) {
+        int balance = 0;
+        for (const int edge_index : graph.adj_list[vertex]) {
+            if (graph.edges[edge_index].head == vertex) {
+                balance += flow[edge_index];
+            } else {
+                balance -= flow[edge_index];
+            }
+        }
+        if (balance != 0) {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -268,6 +299,38 @@ std::optional<std::vector<RootedSpanningTree> > BruteForceEdgeIndependentTrees(
     if (BruteForceEdgeIndependentTreesSearch(
             graph, candidate_trees, root, k, &chosen_trees)) {
         return chosen_trees;
+    }
+    return std::nullopt;
+}
+
+bool BruteForceNowhereZeroKFlowSearch(
+    const Graph &graph, int k, int edge_index, std::vector<int> *flow) {
+    if (edge_index == graph.NumEdges()) {
+        return IsValidNowhereZeroKFlow(graph, *flow, k);
+    }
+
+    for (int value = -(k - 1); value <= (k - 1); ++value) {
+        if (value == 0) {
+            continue;
+        }
+        (*flow)[edge_index] = value;
+        if (BruteForceNowhereZeroKFlowSearch(graph, k, edge_index + 1, flow)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::optional<std::vector<int> > BruteForceNowhereZeroKFlow(
+    const Graph &graph, int k) {
+    if (k <= 1) {
+        throw std::invalid_argument("Flow parameter k must be at least 2");
+    }
+
+    std::vector<int> flow(graph.NumEdges(), 0);
+    if (BruteForceNowhereZeroKFlowSearch(graph, k, 0, &flow)) {
+        return flow;
     }
     return std::nullopt;
 }
@@ -519,6 +582,38 @@ void TestEdgeIndependentTreesOnKnownGraphs() {
     assert(AreValidEdgeIndependentTrees(k4, *k4_trees, 0));
 }
 
+void TestNowhereZeroKFlowRejectsInvalidArguments() {
+    Graph graph({{0, 1}, {0, 1}});
+
+    bool threw = false;
+    try {
+        static_cast<void>(graph.NowhereZeroKFlow(1));
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestNowhereZeroKFlowOnKnownGraphs() {
+    Graph double_edge({{0, 1}, {0, 1}});
+    const std::optional<std::vector<int> > double_edge_flow =
+        double_edge.NowhereZeroKFlow(2);
+    assert(double_edge_flow.has_value());
+    assert(IsValidNowhereZeroKFlow(double_edge, *double_edge_flow, 2));
+
+    Graph triangle({{0, 1}, {1, 2}, {2, 0}});
+    const std::optional<std::vector<int> > triangle_flow =
+        triangle.NowhereZeroKFlow(2);
+    assert(triangle_flow.has_value());
+    assert(IsValidNowhereZeroKFlow(triangle, *triangle_flow, 2));
+
+    Graph path({{0, 1}, {1, 2}});
+    assert(!path.NowhereZeroKFlow(2).has_value());
+
+    Graph single_edge(std::vector<std::tuple<int, int> >{{0, 1}});
+    assert(!single_edge.NowhereZeroKFlow(3).has_value());
+}
+
 
 void TestRandomGraphGenerationOnManySeeds() {
     for (std::uint32_t seed = 0; seed < 100; ++seed) {
@@ -557,6 +652,42 @@ void TestConnectivityMatchesBruteForceOnRandomGraphs() {
     }
 }
 
+void TestNowhereZeroKFlowMatchesBruteForceOnRandomGraphs() {
+    std::mt19937 rng(20260412u);
+    std::uniform_int_distribution<int> vertex_distribution(1, 4);
+    std::uniform_int_distribution<int> edge_distribution(0, 5);
+
+    for (int iteration = 0; iteration < 80; ++iteration) {
+        const int num_vertices = vertex_distribution(rng);
+        const int num_edges = edge_distribution(rng);
+
+        Graph graph(num_vertices);
+        if (num_vertices >= 2) {
+            std::uniform_int_distribution<int> endpoint_distribution(
+                0, num_vertices - 1);
+            for (int edge_index = 0; edge_index < num_edges; ++edge_index) {
+                const int u = endpoint_distribution(rng);
+                int v = endpoint_distribution(rng);
+                while (v == u) {
+                    v = endpoint_distribution(rng);
+                }
+                graph.AddEdge(u, v);
+            }
+        }
+
+        for (int k = 2; k <= 4; ++k) {
+            const std::optional<std::vector<int> > expected =
+                BruteForceNowhereZeroKFlow(graph, k);
+            const std::optional<std::vector<int> > actual =
+                graph.NowhereZeroKFlow(k);
+            assert(expected.has_value() == actual.has_value());
+            if (actual.has_value()) {
+                assert(IsValidNowhereZeroKFlow(graph, *actual, k));
+            }
+        }
+    }
+}
+
 void TestRandomPinchingGraphRejectsInvalidArguments() {
     GraphGenerator generator(11);
 
@@ -571,6 +702,26 @@ void TestRandomPinchingGraphRejectsInvalidArguments() {
     threw = false;
     try {
         generator.RandomPinchingEvenGraph(5, 3);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+}
+
+void TestSingletonPinchingGraphRejectsInvalidArguments() {
+    GraphGenerator generator(11);
+
+    bool threw = false;
+    try {
+        generator.SingletonPinchingEvenGraph(1, 4);
+    } catch (const std::invalid_argument &) {
+        threw = true;
+    }
+    assert(threw);
+
+    threw = false;
+    try {
+        generator.SingletonPinchingEvenGraph(5, 3);
     } catch (const std::invalid_argument &) {
         threw = true;
     }
@@ -619,6 +770,27 @@ void TestRandomPinchingGraphOnManySeeds() {
         assert(graph->NumVertices() == kNumVertices);
         assert(graph->NumEdges() == kExpectedEdges);
         assert(!HasSelfLoop(*graph));
+        assert(graph->Connectivity() == kConnectivity);
+    }
+}
+
+void TestSingletonPinchingGraphOnManySeeds() {
+    constexpr int kNumVertices = 8;
+    constexpr int kConnectivity = 4;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
+
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.SingletonPinchingEvenGraph(kNumVertices, kConnectivity);
+
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
         assert(graph->Connectivity() == kConnectivity);
     }
 }
@@ -691,22 +863,26 @@ void TestKargerPinchingEvenGraphVerboseModePreservesGeneration() {
     assert(output.find("parallel_edge_fraction=") != std::string::npos);
 }
 
-void TestKargerPinchingEvenGraphDefaultPrefersNonParallelEdges() {
+void TestKargerPinchingEvenGraphWithExplicitDefaultParametersOnManySeeds() {
     constexpr int kNumVertices = 8;
     constexpr int kConnectivity = 4;
-    constexpr std::uint32_t kSeed = 17;
+    constexpr int kExpectedEdges =
+        kConnectivity + (kNumVertices - 2) * (kConnectivity / 2);
 
-    GraphGenerator default_generator(kSeed);
-    const std::unique_ptr<Graph> default_graph =
-        default_generator.KargerPinchingEvenGraph(kNumVertices, kConnectivity);
+    for (std::uint32_t seed = 0; seed < 100; ++seed) {
+        GraphGenerator generator(seed);
+        const std::unique_ptr<Graph> graph =
+            generator.KargerPinchingEvenGraph(
+                kNumVertices, kConnectivity, false, false, false, 0, 10);
 
-    GraphGenerator explicit_generator(kSeed);
-    const std::unique_ptr<Graph> explicit_graph =
-        explicit_generator.KargerPinchingEvenGraph(
-            kNumVertices, kConnectivity, false, true);
-
-    assert(default_graph->edges == explicit_graph->edges);
-    assert(default_graph->adj_list == explicit_graph->adj_list);
+        assert(graph->NumVertices() == kNumVertices);
+        assert(graph->NumEdges() == kExpectedEdges);
+        assert(!HasSelfLoop(*graph));
+        for (int vertex = 0; vertex < graph->NumVertices(); ++vertex) {
+            assert(Degree(*graph, vertex) == kConnectivity);
+        }
+        assert(graph->Connectivity() == kConnectivity);
+    }
 }
 
 void TestKargerPinchingEvenGraphWithoutNonSingleVertexPreferenceOnManySeeds() {
@@ -924,16 +1100,20 @@ int main() {
     TestGraphConstructsFromExportedFile();
     TestDecomposeConnectivityOnKnownGraphs();
     TestEdgeIndependentTreesOnKnownGraphs();
+    TestNowhereZeroKFlowRejectsInvalidArguments();
+    TestNowhereZeroKFlowOnKnownGraphs();
     TestRandomGraphGenerationOnManySeeds();
     TestConnectivityMatchesBruteForceOnRandomGraphs();
     TestRandomPinchingGraphRejectsInvalidArguments();
     TestRandomPinchingGraphOnManySeeds();
+    TestSingletonPinchingGraphRejectsInvalidArguments();
+    TestSingletonPinchingGraphOnManySeeds();
     TestKargerPinchingEvenGraphRejectsInvalidArguments();
     TestKargerPinchingEvenGraphOnManySeeds();
     TestKargerPinchingEvenGraphWithoutNonParallelPreferenceOnManySeeds();
     TestKargerPinchingEvenGraphWithoutNonSingleVertexPreferenceOnManySeeds();
     TestKargerPinchingEvenGraphVerboseModePreservesGeneration();
-    TestKargerPinchingEvenGraphDefaultPrefersNonParallelEdges();
+    TestKargerPinchingEvenGraphWithExplicitDefaultParametersOnManySeeds();
     TestRandomPinchingOddGraphRejectsInvalidArguments();
     TestRandomPinchingOddGraphOnManySeeds();
     TestAdversarialPinchingEvenGraphRejectsInvalidArguments();
@@ -941,5 +1121,6 @@ int main() {
     TestAdversarialPinchingEvenGraphContractOnManySeeds();
     TestEdgeIndependentTreesMatchesBruteForceOnRandomGraphs();
     TestDecomposeConnectivityMatchesBruteForceOnRandomGraphs();
+    TestNowhereZeroKFlowMatchesBruteForceOnRandomGraphs();
     return 0;
 }

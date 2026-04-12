@@ -16,6 +16,7 @@ class GraphGenerator {
 
         std::unique_ptr<Graph> GenerateRandomGraph(int n, int m);
         std::unique_ptr<Graph> RandomPinchingEvenGraph(int n, int connectivity);
+        std::unique_ptr<Graph> SingletonPinchingEvenGraph(int n, int connectivity);
         std::unique_ptr<Graph> KargerPinchingEvenGraph(
             int n,
             int connectivity,

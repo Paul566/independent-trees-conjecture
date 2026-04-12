@@ -5,6 +5,8 @@ from pathlib import Path
 
 from draw_graph import collect_draw_edges
 from draw_graph import collect_indexed_draw_edges
+from draw_graph import draw_graph_directory
+from draw_graph import list_graph_files
 from draw_graph import read_decomposition
 from draw_graph import read_graph
 from draw_graph import read_trees
@@ -77,6 +79,35 @@ def test_collect_indexed_draw_edges_preserves_edge_indices() -> None:
     assert sorted(edge_to_radius.values()) == [-0.2, 0.2]
 
 
+def test_list_graph_files_skips_sidecars() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        (temp_dir / "graph_2.txt").write_text("2\n0 1\n", encoding="utf-8")
+        (temp_dir / "graph_1.txt").write_text("2\n0 1\n", encoding="utf-8")
+        (temp_dir / "graph_1_decomposition.txt").write_text("0\n", encoding="utf-8")
+        (temp_dir / "graph_1_trees.txt").write_text("1 0\n-1 0\n", encoding="utf-8")
+        (temp_dir / "graph_1_metadata.txt").write_text("ignore\n", encoding="utf-8")
+
+        graph_files = list_graph_files(temp_dir)
+        assert [path.name for path in graph_files] == ["graph_1.txt", "graph_2.txt"]
+
+
+def test_draw_graph_directory_creates_pngs_for_all_graphs() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        (temp_dir / "graph_0.txt").write_text("2\n0 1\n0 1\n", encoding="utf-8")
+        (temp_dir / "graph_0_decomposition.txt").write_text(
+            "0\n1\n", encoding="utf-8"
+        )
+        (temp_dir / "graph_1.txt").write_text("3\n0 1\n1 2\n", encoding="utf-8")
+        (temp_dir / "graph_1_trees.txt").write_text("1 0\n-1 0 1\n", encoding="utf-8")
+
+        draw_graph_directory(temp_dir)
+
+        assert (temp_dir / "graph_0.png").exists()
+        assert (temp_dir / "graph_1.png").exists()
+
+
 def main() -> None:
     test_read_graph_preserves_edge_order()
     test_decomposition_labels_follow_exported_edge_order()
@@ -84,6 +115,8 @@ def main() -> None:
     test_read_decomposition_rejects_wrong_length()
     test_read_trees_parses_header_and_trees()
     test_collect_indexed_draw_edges_preserves_edge_indices()
+    test_list_graph_files_skips_sidecars()
+    test_draw_graph_directory_creates_pngs_for_all_graphs()
 
 
 if __name__ == "__main__":

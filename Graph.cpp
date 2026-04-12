@@ -30,6 +30,7 @@ using IntVar = operations_research::sat::IntVar;
 using LinearExpr = operations_research::sat::LinearExpr;
 using SatParameters = operations_research::sat::SatParameters;
 using operations_research::sat::SolutionBooleanValue;
+using operations_research::sat::SolutionIntegerValue;
 using operations_research::Domain;
 using operations_research::sat::SolveWithParameters;
 
@@ -43,6 +44,15 @@ void ConfigureDecomposeParameters(SatParameters *parameters) {
 }
 
 void ConfigureEdgeIndependentTreesParameters(SatParameters *parameters) {
+    parameters->set_num_search_workers(1);
+    parameters->set_cp_model_presolve(false);
+    parameters->set_cp_model_probing_level(0);
+    parameters->set_linearization_level(0);
+    parameters->set_symmetry_level(0);
+    parameters->set_use_sat_inprocessing(false);
+}
+
+void ConfigureNowhereZeroKFlowParameters(SatParameters *parameters) {
     parameters->set_num_search_workers(1);
     parameters->set_cp_model_presolve(false);
     parameters->set_cp_model_probing_level(0);
@@ -513,6 +523,56 @@ std::optional<std::vector<RootedSpanningTree> > Graph::EdgeIndependentTrees(
         }
     }
     return rooted_trees;
+}
+
+std::optional<std::vector<int> > Graph::NowhereZeroKFlow(int k) const {
+    if (k <= 1) {
+        throw std::invalid_argument("Flow parameter k must be at least 2");
+    }
+
+    CpModelBuilder model;
+    std::vector<int64_t> possible_values;
+    possible_values.reserve(2 * (k - 1));
+    for (int value = -(k - 1); value <= (k - 1); ++value) {
+        if (value != 0) {
+            possible_values.push_back(value);
+        }
+    }
+
+    std::vector<IntVar> flow_values;
+    flow_values.reserve(NumEdges());
+    for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+        flow_values.push_back(
+            model.NewIntVar(Domain::FromValues(possible_values)));
+    }
+
+    for (int vertex = 0; vertex < NumVertices(); ++vertex) {
+        LinearExpr balance;
+        for (const int edge_index : adj_list[vertex]) {
+            if (edges[edge_index].head == vertex) {
+                balance += flow_values[edge_index];
+            } else {
+                balance -= flow_values[edge_index];
+            }
+        }
+        model.AddEquality(balance, 0);
+    }
+
+    SatParameters parameters;
+    ConfigureNowhereZeroKFlowParameters(&parameters);
+    const CpSolverResponse response =
+        SolveWithParameters(model.Build(), parameters);
+    if (response.status() != CpSolverStatus::FEASIBLE &&
+        response.status() != CpSolverStatus::OPTIMAL) {
+        return std::nullopt;
+    }
+
+    std::vector<int> flow(NumEdges(), 0);
+    for (int edge_index = 0; edge_index < NumEdges(); ++edge_index) {
+        flow[edge_index] = static_cast<int>(
+            SolutionIntegerValue(response, flow_values[edge_index]));
+    }
+    return flow;
 }
 
 int Graph::NumEdges() const {

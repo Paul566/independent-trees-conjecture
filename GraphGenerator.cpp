@@ -326,6 +326,43 @@ std::unique_ptr<Graph> GraphGenerator::RandomPinchingEvenGraph(
     return graph;
 }
 
+std::unique_ptr<Graph> GraphGenerator::SingletonPinchingEvenGraph(
+    int n, int connectivity) {
+    if (n < 2) {
+        throw std::invalid_argument(
+            "Pinching construction requires at least 2 vertices");
+    }
+    if (connectivity <= 0 || connectivity % 2 != 0) {
+        throw std::invalid_argument(
+            "Connectivity must be a positive even integer");
+    }
+
+    auto graph = std::make_unique<Graph>(2);
+    for (int i = 0; i < connectivity; ++i) {
+        graph->AddEdge(0, 1);
+    }
+
+    const int pinch_size = connectivity / 2;
+    for (int step = 0; step < n - 2; ++step) {
+        std::uniform_int_distribution<int> vertex_distribution(
+            0, graph->NumVertices() - 1);
+        const int pinch_vertex = vertex_distribution(rng_);
+        const std::vector<int> sampled_incident_indices =
+            SampleDistinctIndices(
+                &rng_, static_cast<int>(graph->adj_list[pinch_vertex].size()),
+                pinch_size);
+
+        std::vector<int> pinch_edges;
+        pinch_edges.reserve(pinch_size);
+        for (const int incident_index : sampled_incident_indices) {
+            pinch_edges.push_back(graph->adj_list[pinch_vertex][incident_index]);
+        }
+        graph->Pinch(pinch_edges);
+    }
+
+    return graph;
+}
+
 std::unique_ptr<Graph> GraphGenerator::KargerPinchingEvenGraph(
     int n, int connectivity, bool verbose, bool prefer_non_parallel,
     bool prefer_non_single_vertex_cut, int connectivity_luft,
